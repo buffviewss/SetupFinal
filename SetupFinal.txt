@@ -50,7 +50,7 @@ if [[ $BROWSER_SETUP == 1 ]]; then
     if [[ $BTYPE == "chrome" ]]; then
         FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.deb")
     else
-        FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.tar.*")
+        FILE_LIST=$(find "$DOWNLOAD_DIR" -type f)
     fi
 
     if [[ -z "$FILE_LIST" ]]; then
