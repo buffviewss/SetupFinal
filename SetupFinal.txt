@@ -1,120 +1,90 @@
 #!/bin/bash
+set -e
 
-set -e  # Dừng script nếu có lỗi
-# === Kiểm tra và cài python3-venv nếu thiếu ===
+# === Kiểm tra và cài python3-venv nếu cần ===
 if ! dpkg -l | grep -q "python3.12-venv"; then
-    echo "📦 Đang cài python3.12-venv..."
-    sudo apt update
-    sudo apt install -y python3.12-venv
+    if ! dpkg -l | grep -q "python3-venv"; then
+        echo "📦 Đang cài python3-venv..."
+        sudo apt update
+        sudo apt install -y python3-venv
+    fi
 fi
 
-# === Tự cài Python venv và gdown ===
+# === Tạo Python venv + cài gdown ===
 if [[ ! -d "$HOME/gdown-venv" ]]; then
-    echo "📦 Đang tạo venv Python và cài gdown..."
+    echo "📦 Tạo venv và cài gdown..."
     python3 -m venv ~/gdown-venv
 fi
 source ~/gdown-venv/bin/activate
-
-# Kiểm tra pip trong venv
-if ! python3 -m ensurepip --version &>/dev/null; then
-    echo "⚠️ Đang cài ensurepip cho venv..."
-    sudo apt install -y python3-pip
+if ! command -v pip &>/dev/null; then
+    echo "⚠️ Cài pip cho venv..."
+    python3 -m ensurepip --upgrade || sudo apt install -y python3-pip
 fi
+pip install --upgrade --no-cache-dir gdown
 
-pip install --no-cache-dir gdown
+# === CHỌN TRÌNH DUYỆT CÀI ===
+CHROME_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
+FIREFOX_ID="1CeMNJTLgfsaFkcroOh1xpxFC-uz9HrLb"
+DOWNLOAD_DIR="$HOME/browser_temp"
+mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
-
-# === Chọn chức năng chính ===
-echo "Chọn chức năng muốn thực hiện:"
-select option in "Cài Chrome/Firefox" "Cài Nekobox" "Thoát"; do
-    case $option in
-        "Cài Chrome/Firefox") 
-            BROWSER_SETUP=1; break;;
-        "Cài Nekobox")
-            NEKOBOX_SETUP=1; break;;
-        "Thoát")
-            echo "🚪 Thoát script."; exit 0;;
+echo "Chọn trình duyệt muốn cài:"
+select browser in "Chrome" "Firefox" "Thoát"; do
+    case $browser in
+        Chrome) DRIVE_ID="$CHROME_ID"; BTYPE="chrome"; break;;
+        Firefox) DRIVE_ID="$FIREFOX_ID"; BTYPE="firefox"; break;;
+        Thoát) exit 0;;
         *) echo "❌ Lựa chọn không hợp lệ!";;
     esac
 done
 
-# =========================
-# PHẦN 1: CÀI CHROME / FIREFOX
-# =========================
-if [[ $BROWSER_SETUP == 1 ]]; then
-    CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
-    FIREFOX_DRIVE_ID="1CeMNJTLgfsaFkcroOh1xpxFC-uz9HrLb"
-    DOWNLOAD_DIR="$HOME/browser_temp"
-    mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
+echo "📥 Tải $BTYPE từ Google Drive..."
+gdown --folder "https://drive.google.com/drive/folders/$DRIVE_ID" --no-cookies
 
-    echo "Chọn trình duyệt muốn cài:"
-    select browser in "Chrome" "Firefox" "Thoát"; do
-        case $browser in
-            Chrome) DRIVE_ID="$CHROME_DRIVE_ID"; BTYPE="chrome"; break;;
-            Firefox) DRIVE_ID="$FIREFOX_DRIVE_ID"; BTYPE="firefox"; break;;
-            Thoát) exit 0;;
-            *) echo "❌ Lựa chọn không hợp lệ!";;
-        esac
-    done
+echo "🔍 Chọn file để cài:"
+mapfile -t FILE_LIST < <(find "$DOWNLOAD_DIR" -type f)
+for i in "${!FILE_LIST[@]}"; do
+    echo "$((i+1)). ${FILE_LIST[i]}"
+done
+read -p "👉 Nhập số thứ tự: " choice
+FILE_SELECT="${FILE_LIST[choice-1]}"
 
-    echo "📥 Đang tải toàn bộ folder $BTYPE từ Google Drive..."
-    gdown --folder "https://drive.google.com/drive/folders/$DRIVE_ID" --no-cookies
+echo "🧹 Dọn file không dùng..."
+find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete
 
-    echo "🔍 Danh sách file tải về:"
-    if [[ $BTYPE == "chrome" ]]; then
-        FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.deb")
-    else
-        FILE_LIST=$(find "$DOWNLOAD_DIR" -type f)
-    fi
+echo "🗑️ Gỡ bản cũ..."
+if [[ $BTYPE == "chrome" ]]; then
+    sudo apt remove -y google-chrome-stable || true
+else
+    sudo snap remove firefox || sudo apt remove -y firefox || true
+fi
 
-    if [[ -z "$FILE_LIST" ]]; then
-        echo "❌ Không tìm thấy file hợp lệ!"
-        exit 1
-    fi
-
-    echo "$FILE_LIST" | nl -s". "
-    read -p "👉 Nhập số thứ tự file muốn cài: " choice
-    FILE_SELECT=$(echo "$FILE_LIST" | sed -n "${choice}p")
-
-    echo "🧹 Dọn dẹp file không dùng..."
-    find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete
-
-    echo "🗑️ Gỡ bản mặc định..."
-    if [[ $BTYPE == "chrome" ]]; then
-        sudo apt remove -y google-chrome-stable || true
-    else
-        sudo snap remove firefox || sudo apt remove -y firefox || true
-    fi
-
-    if [[ $BTYPE == "chrome" ]]; then
-        echo "🚀 Đang cài Chrome..."
-        sudo dpkg -i "$FILE_SELECT"
-        sudo apt -f install -y
-        sudo apt-mark hold google-chrome-stable
-        sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
-
-        echo "🚫 Tắt update nội bộ Chrome..."
-        sudo rm -rf /opt/google/chrome/cron/
-        sudo mkdir -p /etc/opt/chrome/policies/managed
-        cat <<EOF | sudo tee /etc/opt/chrome/policies/managed/disable_update.json >/dev/null
+if [[ $BTYPE == "chrome" ]]; then
+    echo "🚀 Cài Chrome..."
+    sudo dpkg -i "$FILE_SELECT"
+    sudo apt -f install -y
+    sudo apt-mark hold google-chrome-stable
+    sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
+    sudo rm -rf /opt/google/chrome/cron/
+    sudo mkdir -p /etc/opt/chrome/policies/managed
+    cat <<EOF | sudo tee /etc/opt/chrome/policies/managed/disable_update.json >/dev/null
 {
   "AutoUpdateCheckPeriodMinutes": 0,
   "DisableAutoUpdateChecksCheckbox": true,
   "MetricsReportingEnabled": false
 }
 EOF
-        sudo chmod -R 000 /opt/google/chrome/cron || true
+    sudo chmod -R 000 /opt/google/chrome/cron || true
 
-    else
-        echo "🚀 Đang cài Firefox..."
-        tar -xf "$FILE_SELECT"
-        sudo rm -rf /opt/firefox_custom
-        sudo mv firefox /opt/firefox_custom
-        sudo ln -sf /opt/firefox_custom/firefox /usr/local/bin/firefoxcustom
-
-        echo "🚫 Tắt update nội bộ Firefox..."
-        sudo mkdir -p /opt/firefox_custom/distribution
-        cat <<EOF | sudo tee /opt/firefox_custom/distribution/policies.json >/dev/null
+else
+    echo "🚀 Cài Firefox..."
+    [[ "$FILE_SELECT" == *.tar.* ]] || { echo "❌ File không hợp lệ."; exit 1; }
+    tar -xf "$FILE_SELECT"
+    sudo rm -rf /opt/firefox_custom
+    sudo mv firefox /opt/firefox_custom
+    sudo ln -sf /opt/firefox_custom/firefox /usr/local/bin/firefoxcustom
+    sudo mkdir -p /opt/firefox_custom/distribution
+    cat <<EOF | sudo tee /opt/firefox_custom/distribution/policies.json >/dev/null
 {
   "policies": {
     "AppAutoUpdate": false,
@@ -123,14 +93,15 @@ EOF
   }
 }
 EOF
-        sudo mkdir -p /opt/firefox_custom/browser/defaults/preferences
-        echo 'pref("app.update.enabled", false);' | sudo tee /opt/firefox_custom/browser/defaults/preferences/disable_update.js >/dev/null
-    fi
+    sudo mkdir -p /opt/firefox_custom/browser/defaults/preferences
+    echo 'pref("app.update.enabled", false);' | sudo tee /opt/firefox_custom/browser/defaults/preferences/disable_update.js >/dev/null
+fi
 
-    # === Tạo shortcut ===
-    echo "🎨 Tạo shortcut..."
-    if [[ $BTYPE == "chrome" ]]; then
-        cat <<EOF > ~/.local/share/applications/browser_custom.desktop
+# === Tạo shortcut ===
+echo "🎨 Tạo shortcut trình duyệt..."
+mkdir -p ~/.local/share/applications
+if [[ $BTYPE == "chrome" ]]; then
+    cat <<EOF > ~/.local/share/applications/browser_custom.desktop
 [Desktop Entry]
 Name=Google Chrome (Custom)
 Exec=/usr/bin/google-chrome-stable %U
@@ -139,8 +110,8 @@ Type=Application
 Categories=Network;WebBrowser;
 StartupNotify=true
 EOF
-    else
-        cat <<EOF > ~/.local/share/applications/browser_custom.desktop
+else
+    cat <<EOF > ~/.local/share/applications/browser_custom.desktop
 [Desktop Entry]
 Name=Firefox (Custom)
 Exec=/usr/local/bin/firefoxcustom %U
@@ -149,49 +120,62 @@ Type=Application
 Categories=Network;WebBrowser;
 StartupNotify=true
 EOF
+fi
+
+# === Pin vào taskbar theo môi trường ===
+DESKTOP_ENV=$(echo "$XDG_CURRENT_DESKTOP" | tr '[:upper:]' '[:lower:]')
+
+if [[ "$DESKTOP_ENV" == *"gnome"* ]]; then
+    echo "📌 Ubuntu GNOME - auto pin..."
+    gio set ~/.local/share/applications/browser_custom.desktop metadata::trusted true 2>/dev/null
+    current_apps=$(gsettings get org.gnome.shell favorite-apps)
+    if [[ $current_apps != *"browser_custom.desktop"* ]]; then
+        new_apps="${current_apps%]*}, 'browser_custom.desktop']"
+        gsettings set org.gnome.shell favorite-apps "$new_apps"
     fi
 
-    # === Pin vào taskbar theo Desktop Environment ===
-    if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
-        echo "📌 Ubuntu GNOME detected - auto pinning..."
-        gio set ~/.local/share/applications/browser_custom.desktop metadata::trusted true 2>/dev/null
-        gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
-    elif echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
-        echo "📌 Lubuntu LXQt detected - hãy nhấp phải và 'Pin to Panel' thủ công."
+elif [[ "$DESKTOP_ENV" == *"lxqt"* ]]; then
+    echo "📌 Lubuntu LXQt - auto sửa panel.conf..."
+    CONFIG="$HOME/.config/lxqt/panel.conf"
+    if [[ -f "$CONFIG" ]] && ! grep -q "browser_custom.desktop" "$CONFIG"; then
+        sed -i "/^\[quicklaunch\]/,/^\[/ s|^apps=.*|&,'browser_custom.desktop'|" "$CONFIG"
+        echo "✅ Đã thêm vào quicklaunch. Vui lòng chạy: lxqt-panel --restart"
+    else
+        echo "⚠️ Không tự động được. Hãy kéo shortcut ra panel thủ công nếu cần."
     fi
+else
+    echo "⚠️ Không rõ môi trường desktop. Pin thủ công."
 fi
 
 # =========================
 # PHẦN 2: CÀI NEKOBOX
 # =========================
-if [[ $NEKOBOX_SETUP == 1 ]]; then
-    echo "🔄 Updating system packages..."
-    sudo add-apt-repository universe -y || true
-    sudo apt update && sudo apt upgrade -y
+echo "📦 Bắt đầu cài Nekobox..."
 
-    echo "📦 Installing required packages..."
-    sudo apt install -y open-vm-tools open-vm-tools-desktop python3-pip unzip build-essential qtbase5-dev python3-venv
-    python3 -m venv ~/venv && source ~/venv/bin/activate && pip install --upgrade pip gdown
+sudo add-apt-repository universe -y || true
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y open-vm-tools open-vm-tools-desktop python3-pip unzip build-essential qtbase5-dev python3-venv
 
-    echo "📂 Preparing Nekoray folder..."
-    rm -rf ~/Downloads/nekoray
-    mkdir -p ~/Downloads/nekoray
-    cd ~/Downloads
+source ~/gdown-venv/bin/activate
+pip install --upgrade gdown
 
-    FILE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"
-    gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Download failed!"; exit 1; }
-    unzip -o nekobox.zip -d ~/Downloads/nekoray
+echo "📂 Chuẩn bị thư mục Nekobox..."
+rm -rf ~/Downloads/nekoray
+mkdir -p ~/Downloads/nekoray
+cd ~/Downloads
 
-    inner_dir=$(find ~/Downloads/nekoray -mindepth 1 -maxdepth 1 -type d | head -n 1)
-    if [ "$inner_dir" != "" ] && [ "$inner_dir" != "$HOME/Downloads/nekoray" ]; then
-        mv "$inner_dir"/* ~/Downloads/nekoray/
-        rm -rf "$inner_dir"
-    fi
+gdown --id "1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj" -O nekobox.zip || { echo "❌ Tải thất bại."; exit 1; }
+unzip -o nekobox.zip -d ~/Downloads/nekoray
 
-    cd ~/Downloads/nekoray && chmod +x launcher nekobox nekobox_core || true
+inner_dir=$(find ~/Downloads/nekoray -mindepth 1 -maxdepth 1 -type d | head -n 1)
+if [ "$inner_dir" != "" ] && [ "$inner_dir" != "$HOME/Downloads/nekoray" ]; then
+    mv "$inner_dir"/* ~/Downloads/nekoray/
+    rm -rf "$inner_dir"
+fi
+cd ~/Downloads/nekoray && chmod +x launcher nekobox nekobox_core || true
 
-    echo "🖥️ Creating desktop shortcut..."
-    cat <<EOF > ~/Desktop/nekoray.desktop
+echo "🖥️ Tạo shortcut Nekobox..."
+cat <<EOF > ~/Desktop/nekoray.desktop
 [Desktop Entry]
 Version=1.0
 Name=Nekobox
@@ -202,19 +186,27 @@ Terminal=false
 Type=Application
 Categories=Utility;
 EOF
-    chmod +x ~/Desktop/nekoray.desktop
+chmod +x ~/Desktop/nekoray.desktop
 
-    mkdir -p ~/.config/autostart
-    cp ~/Desktop/nekoray.desktop ~/.config/autostart/nekoray.desktop
+mkdir -p ~/.config/autostart
+cp ~/Desktop/nekoray.desktop ~/.config/autostart/nekoray.desktop
 
-    if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
-        echo "📌 Ubuntu GNOME detected - auto pinning Nekobox..."
-        gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")"
-    elif echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
-        echo "📌 Lubuntu LXQt detected - hãy kéo shortcut vào panel thủ công."
+if [[ "$DESKTOP_ENV" == *"gnome"* ]]; then
+    echo "📌 Ubuntu GNOME - auto pin Nekobox..."
+    gio set ~/Desktop/nekoray.desktop metadata::trusted true 2>/dev/null
+    current_apps=$(gsettings get org.gnome.shell favorite-apps)
+    if [[ $current_apps != *"nekoray.desktop"* ]]; then
+        new_apps="${current_apps%]*}, 'nekoray.desktop']"
+        gsettings set org.gnome.shell favorite-apps "$new_apps"
+    fi
+
+elif [[ "$DESKTOP_ENV" == *"lxqt"* ]]; then
+    echo "📌 Lubuntu LXQt - thêm vào quicklaunch..."
+    CONFIG="$HOME/.config/lxqt/panel.conf"
+    if [[ -f "$CONFIG" ]] && ! grep -q "nekoray.desktop" "$CONFIG"; then
+        sed -i "/^\[quicklaunch\]/,/^\[/ s|^apps=.*|&,'nekoray.desktop'|" "$CONFIG"
+        echo "✅ Đã thêm vào quicklaunch. Chạy: lxqt-panel --restart"
     fi
 fi
 
-echo "🎉 Hoàn tất cài đặt!"
-
-
+echo "🎉 Hoàn tất cài đặt Chrome/Firefox + Nekobox!"
