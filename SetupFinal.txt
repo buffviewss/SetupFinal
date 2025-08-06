@@ -1,6 +1,12 @@
 #!/bin/bash
 
 set -e  # Dừng script nếu có lỗi
+# === Kiểm tra và cài python3-venv nếu thiếu ===
+if ! dpkg -l | grep -q "python3.12-venv"; then
+    echo "📦 Đang cài python3.12-venv..."
+    sudo apt update
+    sudo apt install -y python3.12-venv
+fi
 
 # === Tự cài Python venv và gdown ===
 if [[ ! -d "$HOME/gdown-venv" ]]; then
@@ -8,7 +14,15 @@ if [[ ! -d "$HOME/gdown-venv" ]]; then
     python3 -m venv ~/gdown-venv
 fi
 source ~/gdown-venv/bin/activate
+
+# Kiểm tra pip trong venv
+if ! python3 -m ensurepip --version &>/dev/null; then
+    echo "⚠️ Đang cài ensurepip cho venv..."
+    sudo apt install -y python3-pip
+fi
+
 pip install --no-cache-dir gdown
+
 
 # === Chọn chức năng chính ===
 echo "Chọn chức năng muốn thực hiện:"
