@@ -1,25 +1,21 @@
 #!/bin/bash
 set -e
 
-# === Tự cài Python venv và gdown ===
+# === PHẦN 1: CÀI CHROME / FIREFOX ===
+
 if [[ ! -d "$HOME/gdown-venv" ]]; then
     echo "📦 Đang tạo venv Python và cài gdown..."
     python3 -m venv ~/gdown-venv
 fi
 
 source ~/gdown-venv/bin/activate
+pip install --upgrade --no-cache-dir gdown
 
-# Cài gdown trong venv (đảm bảo luôn có)
-pip install --no-cache-dir gdown
-
-# === Cấu hình Google Drive Folder ID ===
 CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
 FIREFOX_DRIVE_ID="1CeMNJTLgfsaFkcroOh1xpxFC-uz9HrLb"
-
 DOWNLOAD_DIR="$HOME/browser_temp"
 mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
-# === Chọn trình duyệt ===
 echo "Chọn trình duyệt muốn cài:"
 select browser in "Chrome" "Firefox" "Thoát"; do
     case $browser in
@@ -30,16 +26,14 @@ select browser in "Chrome" "Firefox" "Thoát"; do
     esac
 done
 
-# === Tải toàn bộ folder từ Google Drive ===
-echo "📥 Đang tải toàn bộ folder $BTYPE từ Google Drive..."
+echo "📥 Đang tải folder $BTYPE từ Google Drive..."
 gdown --folder "https://drive.google.com/drive/folders/$DRIVE_ID" --no-cookies
 
-# === Liệt kê file tải về ===
 echo "🔍 Danh sách file tải về:"
 if [[ $BTYPE == "chrome" ]]; then
     FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.deb")
 else
-    FILE_LIST=$(find "$DOWNLOAD_DIR" -type f)
+    FILE_LIST=$(find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1)
 fi
 
 if [[ -z "$FILE_LIST" ]]; then
@@ -47,17 +41,21 @@ if [[ -z "$FILE_LIST" ]]; then
     exit 1
 fi
 
-# Hiển thị danh sách để chọn
-echo "$FILE_LIST" | nl -s". "
+mapfile -t files_array <<< "$FILE_LIST"
+
+for i in "${!files_array[@]}"; do
+    echo "$((i+1)). ${files_array[$i]}"
+done
+
 read -p "👉 Nhập số thứ tự file muốn cài: " choice
+choice=$((choice - 1))
 
-FILE_SELECT=$(echo "$FILE_LIST" | sed -n "${choice}p")
-
-if [[ ! -f "$FILE_SELECT" ]]; then
-    echo "❌ File không tồn tại!"
+if [[ $choice -lt 0 || $choice -ge ${#files_array[@]} ]]; then
+    echo "❌ Số không hợp lệ!"
     exit 1
 fi
 
+FILE_SELECT="${files_array[$choice]}"
 echo "✅ Chọn file: $FILE_SELECT"
 
 find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1 ! -path "$FILE_SELECT" -exec rm -rf {} +
@@ -90,24 +88,13 @@ EOF
 
 else
     echo "🚀 Cài Firefox..."
-    # === Xử lý file hoặc thư mục Firefox ===
-if [[ -f "$FILE_SELECT" && "$FILE_SELECT" == *.tar.* ]]; then
-    echo "📦 Giải nén file nén..."
-    tar -xf "$FILE_SELECT"
-
-elif [[ -d "$FILE_SELECT" ]]; then
-    # Kiểm tra bên trong thư mục có file 'firefox' thực thi không
-    if [[ -x "$FILE_SELECT/firefox" ]]; then
-        echo "📂 Phát hiện thư mục Firefox hợp lệ."
+    if [[ -f "$FILE_SELECT" && "$FILE_SELECT" == *.tar.* ]]; then
+        tar -xf "$FILE_SELECT"
+    elif [[ -d "$FILE_SELECT" && "$(basename \"$FILE_SELECT\")" == firefox* ]]; then
         cp -r "$FILE_SELECT" ./firefox
     else
-        echo "❌ Thư mục không chứa Firefox hợp lệ!"; exit 1
+        echo "❌ File không hợp lệ!"; exit 1
     fi
-
-else
-    echo "❌ File không hợp lệ!"; exit 1
-fi
-
     sudo rm -rf /opt/firefox_custom
     sudo mv firefox /opt/firefox_custom
     sudo ln -sf /opt/firefox_custom/firefox /usr/local/bin/firefoxcustom
