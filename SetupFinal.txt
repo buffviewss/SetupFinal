@@ -90,13 +90,24 @@ EOF
 
 else
     echo "🚀 Cài Firefox..."
-    if [[ -f "$FILE_SELECT" && "$FILE_SELECT" == *.tar.* ]]; then
-        tar -xf "$FILE_SELECT"
-    elif [[ -d "$FILE_SELECT" && "$(basename "$FILE_SELECT")" == firefox* ]]; then
+    # === Xử lý file hoặc thư mục Firefox ===
+if [[ -f "$FILE_SELECT" && "$FILE_SELECT" == *.tar.* ]]; then
+    echo "📦 Giải nén file nén..."
+    tar -xf "$FILE_SELECT"
+
+elif [[ -d "$FILE_SELECT" ]]; then
+    # Kiểm tra bên trong thư mục có file 'firefox' thực thi không
+    if [[ -x "$FILE_SELECT/firefox" ]]; then
+        echo "📂 Phát hiện thư mục Firefox hợp lệ."
         cp -r "$FILE_SELECT" ./firefox
     else
-        echo "❌ File không hợp lệ!"; exit 1
+        echo "❌ Thư mục không chứa Firefox hợp lệ!"; exit 1
     fi
+
+else
+    echo "❌ File không hợp lệ!"; exit 1
+fi
+
     sudo rm -rf /opt/firefox_custom
     sudo mv firefox /opt/firefox_custom
     sudo ln -sf /opt/firefox_custom/firefox /usr/local/bin/firefoxcustom
