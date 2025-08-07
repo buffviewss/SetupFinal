@@ -41,16 +41,24 @@ if [[ -z "$FILE_LIST" ]]; then
     exit 1
 fi
 
-echo "$FILE_LIST" | nl -s". "
-read -p "👉 Nhập số thứ tự file muốn cài: " choice
-FILE_SELECT=$(echo "$FILE_LIST" | sed -n "${choice}p")
+# ✅ Hiển thị danh sách chọn theo số thứ tự
+mapfile -t files_array <<< "$FILE_LIST"
 
-if [[ ! -e "$FILE_SELECT" ]]; then
-    echo "❌ File không tồn tại!"
+for i in "${!files_array[@]}"; do
+    echo "$((i+1)). ${files_array[$i]}"
+done
+
+read -p "👉 Nhập số thứ tự file muốn cài: " choice
+choice=$((choice - 1))
+
+if [[ $choice -lt 0 || $choice -ge ${#files_array[@]} ]]; then
+    echo "❌ Số không hợp lệ!"
     exit 1
 fi
 
+FILE_SELECT="${files_array[$choice]}"
 echo "✅ Chọn file: $FILE_SELECT"
+
 find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1 ! -path "$FILE_SELECT" -exec rm -rf {} +
 
 echo "🗑️ Gỡ bản cũ..."
