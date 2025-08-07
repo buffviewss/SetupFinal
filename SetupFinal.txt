@@ -158,8 +158,6 @@ echo "✅ Hoàn tất! $BTYPE đã được cài, khóa update và tắt update 
 
 
 
-#!/bin/bash
-
 # =========================
 # Setup Nekobox on Ubuntu/Lubuntu (Fixed)
 # =========================
