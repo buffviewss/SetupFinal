@@ -1,45 +1,36 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v10 (Updated with Clean Uninstall of Chrome)
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v8
 
 set -euo pipefail
 
-log(){ echo -e "$1"; }
-need_sudo(){ if ! sudo -v; then echo "Cần quyền sudo."; exit 1; fi }
-is_cmd(){ command -v "$1" &>/dev/null; }
-is_gnome(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && is_cmd gsettings && gsettings list-schemas 2>/dev/null | grep -q '^org.gnome.shell$'; }
-is_lxqt(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt|LXQT|LxQt ]] || pgrep -x lxqt-panel >/dev/null 2>&1; }
-
-# ===== Helpers =====
-purge_if_installed(){
-  need_sudo
-  for pkg in "$@"; do
-    if dpkg -s "$pkg" >/dev/null 2>&1; then
-      sudo apt purge -y "$pkg" || true
-    fi
-  done
+log() {
+  echo -e "$1"
 }
 
-# ===== Clean Uninstall Chrome =====
-clean_uninstall_chrome(){
-  log "🔄 Gỡ cài đặt Chrome cũ (nếu có)..."
-  sudo apt remove --purge google-chrome-stable -y || true
-  sudo apt autoremove -y || true
+need_sudo() {
+  if ! sudo -v; then
+    echo "Cần quyền sudo."
+    exit 1
+  fi
+}
 
-  # Xóa sạch các thư mục và cấu hình cũ
-  log "🧹 Dọn sạch cấu hình cũ của Chrome..."
-  sudo rm -rf /opt/google/chrome
-  sudo rm -rf ~/.config/google-chrome
-  sudo rm -rf ~/.cache/google-chrome
-  sudo rm -rf ~/.local/share/google-chrome
+is_cmd() {
+  command -v "$1" &>/dev/null
+}
 
-  # Kiểm tra và xóa tất cả shortcut
-  rm -f ~/.local/share/applications/google-chrome.desktop
-  rm -f ~/.local/share/applications/browser_custom.desktop
+is_gnome() {
+  [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && is_cmd gsettings && gsettings list-schemas 2>/dev/null | grep -q '^org.gnome.shell$'
+}
+
+is_lxqt() {
+  [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt|LXQT|LxQt ]] || pgrep -x lxqt-panel >/dev/null 2>&1
 }
 
 # ===== Install gdown =====
-ensure_gdown(){
-  need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip curl || true
+ensure_gdown() {
+  need_sudo
+  sudo apt update -y || true
+  sudo apt install -y python3-venv python3-pip curl || true
   export PATH="$HOME/.local/bin:$PATH"
   local VENV="$HOME/gdown-venv"
 
@@ -56,7 +47,7 @@ ensure_gdown(){
 }
 
 # ===== LXQt Quicklaunch helpers =====
-ensure_lxqt_quicklaunch_plugin(){
+ensure_lxqt_quicklaunch_plugin() {
   local conf="$HOME/.config/lxqt/panel.conf"
   mkdir -p "$HOME/.config/lxqt"
   touch "$conf"
@@ -78,7 +69,7 @@ ensure_lxqt_quicklaunch_plugin(){
   fi
 }
 
-pin_lxqt_quicklaunch(){
+pin_lxqt_quicklaunch() {
   local desktop="$1"
   local conf="$HOME/.config/lxqt/panel.conf"
   ensure_lxqt_quicklaunch_plugin
@@ -121,104 +112,69 @@ pin_lxqt_quicklaunch(){
   fi
 }
 
-lock_chrome_with_apt_pin(){
-  need_sudo
-  sudo mkdir -p /etc/apt/preferences.d
-  sudo tee /etc/apt/preferences.d/99-hold-google-chrome.pref >/dev/null <<'EOF'
-Package: google-chrome-stable
-Pin: release *
-Pin-Priority: -1
+# ===== Install Nekobox =====
+install_nekobox() {
+  ensure_gdown
+  log "📂 Chuẩn bị Nekobox..."
+  rm -rf "$HOME/Downloads/nekoray"
+  mkdir -p "$HOME/Downloads/nekoray"
+  cd "$HOME/Downloads"
+  local FILE_ID="${NEKOBOX_FILE_ID:-1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj}"
+  gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Tải thất bại."; return 1; }
+  unzip -o nekobox.zip -d "$HOME/Downloads/nekoray"
+  local inner_dir
+  inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
+  if [[ -n "${inner_dir:-}" && "$inner_dir" != "$HOME/Downloads/nekoray" ]]; then
+    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true
+    rm -rf "$inner_dir"
+  fi
+  cd "$HOME/Downloads/nekoray"
+  chmod +x launcher nekobox nekobox_core 2>/dev/null || true
+
+  cat <<EOF > "$HOME/Desktop/nekoray.desktop"
+[Desktop Entry]
+Version=1.0
+Name=Nekobox
+Comment=Open Nekobox
+Exec=$HOME/Downloads/nekoray/nekobox
+Icon=$HOME/Downloads/nekoray/nekobox.png
+Terminal=false
+Type=Application
+Categories=Utility;
 EOF
-}
+  chmod +x "$HOME/Desktop/nekoray.desktop"
+  mkdir -p "$HOME/.local/share/applications"
+  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.local/share/applications/nekoray.desktop"
 
-# ===== 1) Base =====
-base_setup(){
-  need_sudo
-  log "🔄 Cập nhật hệ thống..."
-  sudo add-apt-repository universe -y || true
-  sudo apt update && sudo apt upgrade -y
-  sudo apt install -y open-vm-tools open-vm-tools-desktop || echo "⚠️ Open VM Tools không khả dụng."
-  sudo apt install -y unzip build-essential \
-    libqt5network5 libqt5core5a libqt5gui5 libqt5widgets5 \
-    qtbase5-dev libqt5x11extras5 libqt5quick5 libqt5quickwidgets5 libqt5quickparticles5
-  log "✅ Hoàn tất bước nền."
-}
+  mkdir -p "$HOME/.config/autostart"
+  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"
+  chmod +x "$HOME/.config/autostart/nekoray.desktop"
 
-# ===== Choose Chrome deb from Drive =====
-choose_chrome_file_from_drive(){
-  local CHROME_DRIVE_ID="$1"
-  local raw=""
-  local tried=()
-
-  if gdown --help 2>/dev/null | grep -q -- "--list"; then
-    log "📋 Lấy danh sách (gdown, không tải xuống)..."
-    raw="$(gdown --list "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --format csv --no-cookies 2>/dev/null || true)"; tried+=("gdown:url+csv+nocookies")
-    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" --format csv 2>/dev/null || true)"; tried+=("gdown:id+csv")
-  else
-    tried+=("gdown:unsupported")
+  if is_gnome; then
+    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
   fi
-
-  # 2) Fallback scrape WITHOUT resourcekey
-  if [[ -z "$raw" ]]; then
-    log "🔎 Thử scrape (không rk)..."
-    raw="$(RESKEY="" scrape_drive_folder "$CHROME_DRIVE_ID" | sed '1i id,name')"
-    [[ -n "$raw" ]] && tried+=("scrape:no-rk")
+  if is_lxqt; then
+    pin_lxqt_quicklaunch "$HOME/.local/share/applications/nekoray.desktop"
   fi
-
-  # 3) If still empty: ask for resourcekey and scrape again
-  if [[ -z "$raw" ]]; then
-    echo "ℹ️ Có thể thư mục yêu cầu 'resourcekey'. Mở link chia sẻ trong trình duyệt, ở thanh địa chỉ sẽ có dạng '?resourcekey=0-XXXX'. Dán phần '0-XXXX' bên dưới (hoặc Enter để bỏ qua):"
-    read -rp "RESOURCEKEY: " RESKEY
-    if [[ -n "${RESKEY:-}" ]]; then
-      export RESKEY
-      raw="$(scrape_drive_folder "$CHROME_DRIVE_ID" | sed '1i id,name')"
-      [[ -n "$raw" ]] && tried+=("scrape:with-rk")
-    fi
-  fi
-
-  if [[ -z "$raw" ]]; then
-    echo "⚠️ Không liệt kê được thư mục. Đã thử: ${tried[*]}."
-    echo "👉 Nếu vẫn không được, bạn sẽ cần dán FILE_ID của gói .deb (sẽ không tải cả thư mục)."
-    read -rp "FILE_ID: " MANUAL_ID
-    if [[ -z "${MANUAL_ID:-}" ]]; then
-      echo "❌ Không có FILE_ID và không thể liệt kê thư mục. Thoát."
-      exit 1
-    fi
-    CHOSEN_ID="$MANUAL_ID"
-    CHOSEN_NAME="chrome_selected.deb"
-    return 0
-  fi
-
-  mapfile -t ids < <(echo "$raw" | awk -F, 'NR>1 && /\.deb($|")/ {print $1}')
-  mapfile -t names < <(echo "$raw" | awk -F, 'NR>1 && /\.deb($|")/ {print $2}')
-  if (( ${#ids[@]} == 0 )); then
-    echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
-  fi
-
-  echo "Các bản Chrome có sẵn:"
-  for i in "${!ids[@]}"; do printf "  %2d) %s\n" $((i+1)) "${names[$i]}"; done
-  read -rp "👉 Chọn số thứ tự gói cần tải & cài: " choice
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice<1 || choice>${#ids[@]} )); then
-    echo "❌ Lựa chọn không hợp lệ."; exit 1
-  fi
-  CHOSEN_ID="${ids[$((choice-1))]}"
-  CHOSEN_NAME="${names[$((choice-1))]}"
-  return 0
+  ./nekobox || echo "ℹ️ Không tự chạy được — mở thủ công từ $HOME/Downloads/nekoray/nekobox."
+  log "✅ Nekobox đã cài."
 }
 
 # ===== 2) Chrome =====
-install_chrome_from_drive(){
+install_chrome_from_drive() {
   ensure_gdown
   local CHROME_DRIVE_ID="${CHROME_DRIVE_ID:-1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1}"
   local DOWNLOAD_DIR="$HOME/browser_temp"
   mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
+  # Choose the Chrome deb file from Google Drive
   choose_chrome_file_from_drive "$CHROME_DRIVE_ID"
   log "📥 Tải duy nhất file đã chọn: $CHOSEN_NAME"
   gdown --id "$CHOSEN_ID" -O "$CHOSEN_NAME"
   local FILE_SELECT="$DOWNLOAD_DIR/$CHOSEN_NAME"
   [[ -f "$FILE_SELECT" ]] || { echo "❌ Tải file thất bại."; exit 1; }
 
+  # Install the new version of Chrome
   need_sudo
   sudo apt remove -y google-chrome-stable || true
   if ! sudo dpkg -i "$FILE_SELECT"; then
@@ -268,7 +224,7 @@ EOF
 }
 
 # ===== 3) Password & autologin =====
-fix_passwords(){
+fix_passwords() {
   need_sudo
   log "🔧 Sửa vấn đề password & autologin..."
   sudo passwd -d "$USER" || true
@@ -323,19 +279,23 @@ EOF
 }
 
 # ===== 4) Nekobox =====
-install_nekobox(){
+install_nekobox() {
   ensure_gdown
   log "📂 Chuẩn bị Nekobox..."
-  rm -rf "$HOME/Downloads/nekoray"; mkdir -p "$HOME/Downloads/nekoray"
+  rm -rf "$HOME/Downloads/nekoray"
+  mkdir -p "$HOME/Downloads/nekoray"
   cd "$HOME/Downloads"
   local FILE_ID="${NEKOBOX_FILE_ID:-1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj}"
   gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Tải thất bại."; return 1; }
   unzip -o nekobox.zip -d "$HOME/Downloads/nekoray"
-  local inner_dir; inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
+  local inner_dir
+  inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
   if [[ -n "${inner_dir:-}" && "$inner_dir" != "$HOME/Downloads/nekoray" ]]; then
-    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true; rm -rf "$inner_dir"
+    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true
+    rm -rf "$inner_dir"
   fi
-  cd "$HOME/Downloads/nekoray"; chmod +x launcher nekobox nekobox_core 2>/dev/null || true
+  cd "$HOME/Downloads/nekoray"
+  chmod +x launcher nekobox nekobox_core 2>/dev/null || true
 
   cat <<EOF > "$HOME/Desktop/nekoray.desktop"
 [Desktop Entry]
@@ -352,7 +312,9 @@ EOF
   mkdir -p "$HOME/.local/share/applications"
   cp "$HOME/Desktop/nekoray.desktop" "$HOME/.local/share/applications/nekoray.desktop"
 
-  mkdir -p "$HOME/.config/autostart"; cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"; chmod +x "$HOME/.config/autostart/nekoray.desktop"
+  mkdir -p "$HOME/.config/autostart"
+  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"
+  chmod +x "$HOME/.config/autostart/nekoray.desktop"
 
   if is_gnome; then
     gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
@@ -365,7 +327,7 @@ EOF
 }
 
 # ===== Auto-run =====
-main(){
+main() {
   log "===== AIO Setup 24.04 (Auto-run v10, Clean Uninstall Chrome) ====="
   clean_uninstall_chrome
   base_setup
@@ -379,21 +341,3 @@ main(){
   log "🎉 Hoàn tất. Khuyến nghị reboot."
 }
 main
-"""
-
-# Save the script
-path = "/mnt/data/setup_all_in_one_autorun_v10_final.sh"
-with open(path, "w") as f:
-    f.write(script_final_v10)
-
-import os
-os.chmod(path, 0o755)
-pathĐây là bản **v10 cuối cùng** của script, đã tích hợp phần **gỡ cài đặt Chrome sạch sẽ** trước khi cài đặt phiên bản mới.
-
-Tải bản mới:
-[Download setup_all_in_one_autorun_v10_final.sh](sandbox:/mnt/data/setup_all_in_one_autorun_v10_final.sh)
-
-Cách sử dụng:
-```bash
-chmod +x setup_all_in_one_autorun_v10_final.sh
-./setup_all_in_one_autorun_v10_final.sh
