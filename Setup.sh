@@ -514,26 +514,81 @@ install_nekobox() {
     log "📥 Downloading Nekobox from Google Drive..."
     timeout 300 gdown --folder "https://drive.google.com/drive/folders/$NEKOBOX_DRIVE_ID" --no-cookies
 
-    # Find Nekobox installation file
+    # Find Nekobox/Nekoray installation file (case-insensitive, include archives)
     local nekobox_file
-    nekobox_file=$(find "$DOWNLOAD_DIR" -name "*nekobox*" -o -name "*NekoBox*" | head -n 1)
+    nekobox_file=$(find "$DOWNLOAD_DIR" -type f \
+        \( -iname "*nekobox*.deb" -o -iname "*nekoray*.deb" \
+           -o -iname "*nekobox*.appimage" -o -iname "*nekoray*.appimage" \
+           -o -iname "*nekobox*.zip" -o -iname "*nekoray*.zip" \
+           -o -iname "*nekobox*.tar.gz" -o -iname "*nekoray*.tar.gz" \) \
+        | head -n 1)
 
     if [[ -z "$nekobox_file" ]]; then
         log "❌ Nekobox installation file not found"
         return 1
     fi
 
-    # Install Nekobox
+    log "📦 Found Nekobox package: $nekobox_file"
+
+    # Install Nekobox/Nekoray
     if [[ "$nekobox_file" == *.deb ]]; then
         sudo dpkg -i "$nekobox_file" || sudo apt install -f -y
-    elif [[ "$nekobox_file" == *.AppImage ]]; then
+    elif [[ "$nekobox_file" == *.AppImage || "$nekobox_file" == *.appimage ]]; then
         chmod +x "$nekobox_file"
-        sudo mv "$nekobox_file" /opt/nekobox
-        sudo ln -sf /opt/nekobox /usr/local/bin/nekobox
+        sudo mkdir -p /opt/nekobox
+        sudo mv -f "$nekobox_file" /opt/nekobox/NekoBox.AppImage
+        # Create wrapper to ensure correct working directory
+        local exe="/opt/nekobox/NekoBox.AppImage"
+        local dir="/opt/nekobox"
+        sudo tee /usr/local/bin/nekobox >/dev/null <<EOF
+#!/bin/bash
+cd "$dir"
+exec "$exe" "$@"
+EOF
+        sudo chmod +x /usr/local/bin/nekobox
+    elif [[ "$nekobox_file" == *.zip ]]; then
+        # Ensure unzip is available
+        if ! command -v unzip >/dev/null 2>&1; then
+            sudo apt update && sudo apt install -y unzip
+        fi
+        local install_dir="/opt/nekobox"
+        sudo mkdir -p "$install_dir"
+        sudo unzip -o "$nekobox_file" -d "$install_dir"
+        # Try to locate executable inside extracted folder
+        local exe
+        exe=$(sudo find "$install_dir" -type f \( -iname "nekobox" -o -iname "nekoray" -o -iname "NekoBox" -o -iname "NekoRay" -o -iname "*.AppImage" \) | head -n 1)
+        if [[ -n "$exe" ]]; then
+            sudo chmod +x "$exe" || true
+            sudo ln -sf "$exe" /usr/local/bin/nekobox
+        else
+            log "⚠️ Could not find executable inside zip; creating generic launcher"
+            # Fallback: if there's a single directory, use its run script if present
+            exe=$(sudo find "$install_dir" -maxdepth 2 -type f -iname "run.sh" | head -n 1)
+            if [[ -n "$exe" ]]; then
+                sudo chmod +x "$exe"
+                sudo ln -sf "$exe" /usr/local/bin/nekobox
+            else
+                log "❌ No executable found after extraction"
+                return 1
+            fi
+        fi
+    elif [[ "$nekobox_file" == *.tar.gz || "$nekobox_file" == *.tgz ]]; then
+        local install_dir="/opt/nekobox"
+        sudo mkdir -p "$install_dir"
+        sudo tar -xzf "$nekobox_file" -C "$install_dir"
+        local exe
+        exe=$(sudo find "$install_dir" -type f \( -iname "nekobox" -o -iname "nekoray" -o -iname "NekoBox" -o -iname "NekoRay" -o -iname "*.AppImage" \) | head -n 1)
+        if [[ -n "$exe" ]]; then
+            sudo chmod +x "$exe" || true
+            sudo ln -sf "$exe" /usr/local/bin/nekobox
+        else
+            log "❌ No executable found after tar extraction"
+            return 1
+        fi
     else
-        # Generic installation
-        chmod +x "$nekobox_file"
-        sudo cp "$nekobox_file" /usr/local/bin/nekobox
+        # Generic: assume it's an executable file
+        chmod +x "$nekobox_file" 2>/dev/null || true
+        sudo cp -f "$nekobox_file" /usr/local/bin/nekobox
     fi
 
     create_nekobox_shortcut
