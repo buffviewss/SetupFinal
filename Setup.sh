@@ -1,8 +1,7 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v7
-# Fixes:
-#  - Lubuntu: skip GDM3 file if directory doesn't exist
-#  - LXQt pin: fix awk syntax (no reserved 'in'), safer section handling
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v9 (APT pin hard lock)
+# - Based on v8 (Lubuntu-safe, LXQt pin fix, silent cron)
+# - Adds APT pinning to block chrome upgrades via apt even if repo is re-enabled.
 
 set -euo pipefail
 
@@ -32,25 +31,36 @@ ensure_gdown(){
   is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
 }
 
-# ===== LXQt Quicklaunch auto-pin (safer) =====
-pin_lxqt_quicklaunch(){
-  local desktop="$1"   # Full path to .desktop file
+# ===== LXQt Quicklaunch helpers =====
+ensure_lxqt_quicklaunch_plugin(){
   local conf="$HOME/.config/lxqt/panel.conf"
   mkdir -p "$HOME/.config/lxqt"
   touch "$conf"
-
-  # Backup once per run
   if [[ -z "${_LXQT_BACKUP_DONE:-}" ]]; then
     cp -f "$conf" "$conf.bak.$(date +%s)" 2>/dev/null || true
     _LXQT_BACKUP_DONE=1
   fi
+  if grep -q '^plugins=' "$conf"; then
+    if ! grep -E '^plugins=.*\bquicklaunch\b' "$conf" >/dev/null; then
+      sed -i 's/^plugins=\(.*\)$/plugins=quicklaunch,\1/' "$conf"
+    fi
+  else
+    awk '
+      BEGIN{done=0}
+      /^\[panel/ && done==0 { print; print "plugins=quicklaunch"; done=1; next }
+      { print }
+      END{ if(done==0) { print "\n[panel]\nplugins=quicklaunch" } }
+    ' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
+  fi
+}
 
-  # Ensure [quicklaunch] section exists
+pin_lxqt_quicklaunch(){
+  local desktop="$1"
+  local conf="$HOME/.config/lxqt/panel.conf"
+  ensure_lxqt_quicklaunch_plugin
   if ! grep -q '^\[quicklaunch\]' "$conf"; then
     printf "\n[quicklaunch]\napps\\size=0\n" >> "$conf"
   fi
-
-  # Insert desktop entry into [quicklaunch] if not already present; recompute size
   awk -v d="$desktop" '
     BEGIN{insec=0; dup=0; cnt=-1}
     function flush_section(){
@@ -75,21 +85,29 @@ pin_lxqt_quicklaunch(){
           if (index($0, d) > 0) dup=1;
           print; next
         }
-        if ($0 ~ /^apps\\size=/) {
-          # capture size then skip (will rewrite)
-          split($0,a,"="); cnt = a[2]+0; next
-        }
+        if ($0 ~ /^apps\\size=/) { split($0,a,"="); cnt = a[2]+0; next }
       }
       print
     }
     END{ if (insec) { flush_section() } }
   ' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
-
-  # Restart LXQt panel to apply (best-effort)
   if is_cmd lxqt-panel; then
     pkill -x lxqt-panel >/dev/null 2>&1 || true
     (nohup lxqt-panel >/dev/null 2>&1 &)
   fi
+}
+
+# ===== Extra hard lock for Chrome via APT pin =====
+lock_chrome_with_apt_pin(){
+  need_sudo
+  sudo mkdir -p /etc/apt/preferences.d
+  sudo tee /etc/apt/preferences.d/99-hold-google-chrome.pref >/dev/null <<'EOF'
+Package: google-chrome-stable
+Pin: release *
+Pin-Priority: -1
+# This prevents apt from installing or upgrading Chrome from any repo.
+# To undo: sudo rm /etc/apt/preferences.d/99-hold-google-chrome.pref && sudo apt-mark unhold google-chrome-stable
+EOF
 }
 
 # ===== 1) Base =====
@@ -133,8 +151,8 @@ install_chrome_from_drive(){
 
   log "🚫 Tắt update nội bộ Chrome..."
   if [[ -d /opt/google/chrome/cron ]]; then
-    sudo rm -rf /opt/google/chrome/cron/ || true
-    sudo chmod -R 000 /opt/google/chrome/cron || true
+    sudo chmod -R 000 /opt/google/chrome/cron 2>/dev/null || true
+    sudo rm -rf /opt/google/chrome/cron/ 2>/dev/null || true
   fi
   sudo mkdir -p /etc/opt/chrome/policies/managed
   cat <<'JSON' >/tmp/disable_update.json
@@ -145,6 +163,9 @@ install_chrome_from_drive(){
 }
 JSON
   sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
+
+  log "🎯 Áp dụng APT pin (hard lock) cho Chrome..."
+  lock_chrome_with_apt_pin
 
   log "🎨 Tạo shortcut Chrome (Custom)..."
   mkdir -p ~/.local/share/applications
@@ -165,7 +186,7 @@ EOF
   if is_lxqt; then
     pin_lxqt_quicklaunch "$HOME/.local/share/applications/browser_custom.desktop"
   fi
-  log "✅ Chrome đã cài & khóa update."
+  log "✅ Chrome đã cài & khóa update (hold + repo off + policy + APT pin)."
 }
 
 # ===== 3) Password & autologin =====
@@ -182,7 +203,6 @@ autologin-user-timeout=0
 autologin-session=Lubuntu
 EOF
 
-  # Only if gdm3 exists (Ubuntu GNOME), otherwise skip on Lubuntu
   if [[ -d /etc/gdm3 ]]; then
     sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
 [daemon]
@@ -270,7 +290,7 @@ EOF
 
 # ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v7, Lubuntu fixes) ====="
+  log "===== AIO Setup 24.04 (Auto-run v9, APT pin) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
