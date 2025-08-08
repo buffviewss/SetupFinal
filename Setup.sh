@@ -1,605 +1,358 @@
 #!/bin/bash
 
-# ===================================
-# CHROME & NEKOBOX AUTO INSTALLER
-# Ubuntu/Lubuntu 24.04 - Full Setup Edition
-# Auto runs: Chrome + Nekobox + Fonts + Audio + Password Fix
-# ===================================
+# ===================================================================
+# SCRIPT TỔNG HỢP: Cài đặt Browser + VM Setup + Fix Password Issues
+# Tương thích với Ubuntu/Lubuntu 24.04
+# Thứ tự: ChromeOld.sh -> SetupVm.bash -> fix_password_issues.sh
+# ===================================================================
 
-set -euo pipefail
+set -e  # Stop if any command fails
 
-# === CONFIGURATION ===
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOWNLOAD_DIR="$HOME/Downloads/browser_setup"
-LOG_FILE="$HOME/setup_$(date +%Y%m%d_%H%M%S).log"
-MACHINE_ID_FILE="$HOME/.machine_id"
+echo "🚀 BẮT ĐẦU SCRIPT TỔNG HỢP - Ubuntu/Lubuntu 24.04"
+echo "📋 Thứ tự thực hiện:"
+echo "   1️⃣ Cài đặt Chrome cũ"
+echo "   2️⃣ Setup VM và Nekobox"
+echo "   3️⃣ Fix tất cả vấn đề password"
+echo ""
 
-# Google Drive folder IDs
+# ===================================================================
+# PHẦN 1: CHROMEOLD.SH - CÀI ĐẶT BROWSER CŨ
+# ===================================================================
+
+echo "🌐 === PHẦN 1: CÀI ĐẶT CHROME CŨ ==="
+
+# Tự cài Python venv và gdown
+if [[ ! -d "$HOME/gdown-venv" ]]; then
+    echo "📦 Đang tạo venv Python và cài gdown..."
+    python3 -m venv ~/gdown-venv
+fi
+
+source ~/gdown-venv/bin/activate
+
+# Cài gdown trong venv (đảm bảo luôn có)
+pip install --no-cache-dir gdown
+
+# Cấu hình Google Drive Folder ID cho Chrome
 CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
-NEKOBOX_DRIVE_ID="1CCercfKCc9W6xFFNxtyhGaVv0M3jdzd_"
 
-# Ubuntu/Lubuntu 24.04 compatibility
-UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "24.04")
-DESKTOP_ENV=""
+DOWNLOAD_DIR="$HOME/browser_temp"
+mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
-# Font and Audio arrays for randomization
-FONTS_LIST=(
-    "fonts-noto" "fonts-liberation" "fonts-dejavu" "fonts-ubuntu" 
-    "fonts-roboto" "fonts-open-sans" "fonts-lato" "fonts-source-code-pro"
-    "fonts-firacode" "fonts-cascadia-code" "fonts-jetbrains-mono"
-    "fonts-hack" "fonts-inconsolata" "fonts-droid-fallback"
-)
+# Chỉ cài Chrome
+echo "📥 Đang cài đặt Google Chrome cũ..."
+DRIVE_ID="$CHROME_DRIVE_ID"
+BTYPE="chrome"
 
-AUDIO_THEMES=(
-    "ubuntu" "smooth" "stereo" "freedesktop" "speech-dispatcher"
-)
+# Tải toàn bộ folder từ Google Drive
+echo "📥 Đang tải toàn bộ folder Chrome từ Google Drive..."
+gdown --folder "https://drive.google.com/drive/folders/$DRIVE_ID" --no-cookies
 
-# === LOGGING ===
-log() {
-    local message="$(date '+%Y-%m-%d %H:%M:%S') - $1"
-    # Send logs to stderr to avoid polluting stdout of functions that 'echo' return values
-    echo "$message" >&2
-    echo "$message" >> "$LOG_FILE" 2>/dev/null || true
+# Liệt kê file Chrome .deb tải về
+echo "🔍 Danh sách file Chrome tải về:"
+FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.deb")
+
+if [[ -z "$FILE_LIST" ]]; then
+    echo "❌ Không tìm thấy file hợp lệ!"
+    exit 1
+fi
+
+# Hiển thị danh sách để chọn
+echo "$FILE_LIST" | nl -s". "
+read -p "👉 Nhập số thứ tự file muốn cài: " choice
+
+FILE_SELECT=$(echo "$FILE_LIST" | sed -n "${choice}p")
+
+if [[ ! -f "$FILE_SELECT" ]]; then
+    echo "❌ File không tồn tại!"
+    exit 1
+fi
+
+echo "✅ Chọn file: $FILE_SELECT"
+
+# Xóa file không được chọn để tiết kiệm dung lượng
+echo "🧹 Dọn dẹp file không dùng..."
+find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete
+
+# Gỡ bản Chrome mặc định
+echo "🗑️ Gỡ Chrome mặc định..."
+sudo apt remove -y google-chrome-stable || true
+
+# Cài đặt Chrome và khóa cập nhật
+echo "🚀 Đang cài Chrome..."
+sudo dpkg -i "$FILE_SELECT"
+sudo apt -f install -y
+sudo apt-mark hold google-chrome-stable
+sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
+
+# Tắt update nội bộ của Chrome
+echo "🚫 Tắt update nội bộ Chrome..."
+sudo rm -rf /opt/google/chrome/cron/
+sudo mkdir -p /etc/opt/chrome/policies/managed
+cat <<EOF > /tmp/disable_update.json
+{
+  "AutoUpdateCheckPeriodMinutes": 0,
+  "DisableAutoUpdateChecksCheckbox": true,
+  "MetricsReportingEnabled": false
 }
-
-# === SYSTEM DETECTION ===
-detect_desktop_environment() {
-    # Enhanced detection for Ubuntu/Lubuntu 24.04
-    if [[ -n "${XDG_CURRENT_DESKTOP:-}" ]]; then
-        DESKTOP_ENV="$XDG_CURRENT_DESKTOP"
-    elif [[ -n "${DESKTOP_SESSION:-}" ]]; then
-        DESKTOP_ENV="$DESKTOP_SESSION"
-    elif pgrep -x "lxqt-session" > /dev/null; then
-        DESKTOP_ENV="LXQt"
-    elif pgrep -x "lxsession" > /dev/null; then
-        DESKTOP_ENV="LXDE"
-    elif pgrep -x "gnome-session" > /dev/null; then
-        DESKTOP_ENV="GNOME"
-    elif pgrep -x "xfce4-session" > /dev/null; then
-        DESKTOP_ENV="XFCE"
-    elif [[ -f "/usr/bin/lxqt-session" ]]; then
-        DESKTOP_ENV="LXQt"
-    elif [[ -f "/usr/bin/gnome-session" ]]; then
-        DESKTOP_ENV="GNOME"
-    else
-        DESKTOP_ENV="Unknown"
-    fi
-    
-    # Normalize desktop environment names for Ubuntu/Lubuntu 24.04
-    case "$DESKTOP_ENV" in
-        "ubuntu:GNOME"|"GNOME"|"gnome") DESKTOP_ENV="GNOME";;
-        "LXQt"|"lxqt"|"Lubuntu") DESKTOP_ENV="LXQt";;
-        "LXDE"|"lxde") DESKTOP_ENV="LXDE";;
-        "XFCE"|"xfce"|"XFCE4") DESKTOP_ENV="XFCE";;
-    esac
-    
-    log "🖥️ Detected desktop environment: $DESKTOP_ENV"
-    log "🐧 Ubuntu version: $UBUNTU_VERSION"
-}
-
-# === MACHINE ID GENERATION ===
-generate_machine_id() {
-    if [[ ! -f "$MACHINE_ID_FILE" ]]; then
-        # Generate unique machine ID based on hardware info
-        local machine_id
-        machine_id=$(cat /proc/cpuinfo /proc/meminfo 2>/dev/null | md5sum | cut -d' ' -f1 | head -c 8)
-        echo "$machine_id" > "$MACHINE_ID_FILE"
-        log "🆔 Generated new machine ID: $machine_id"
-    fi
-    
-    cat "$MACHINE_ID_FILE"
-}
-
-# === SYSTEM PREPARATION ===
-prepare_system() {
-    log "🔧 Preparing system for Ubuntu/Lubuntu 24.04..."
-    
-    # Update package lists
-    sudo apt update
-    
-    # Install essential packages for Ubuntu 24.04
-    sudo apt install -y \
-        wget curl gnupg software-properties-common \
-        apt-transport-https ca-certificates \
-        python3 python3-pip python3-venv \
-        build-essential git unzip \
-        lsb-release
-    
-    # Fix any broken packages
-    sudo apt --fix-broken install -y
-    
-    log "✅ System preparation completed"
-}
-
-# === RANDOM FONT SELECTION ===
-install_random_fonts() {
-    log "🎨 Installing random fonts for this machine..."
-    
-    local machine_id
-    machine_id=$(generate_machine_id)
-    
-    # Use machine ID as seed for consistent randomization
-    local seed=$((0x${machine_id:0:8}))
-    RANDOM=$seed
-    
-    # Select 4-6 random fonts
-    local num_fonts=$((RANDOM % 3 + 4))
-    local selected_fonts=()
-    local temp_fonts=("${FONTS_LIST[@]}")
-    
-    for ((i=0; i<num_fonts; i++)); do
-        if [[ ${#temp_fonts[@]} -eq 0 ]]; then break; fi
-        
-        local idx=$((RANDOM % ${#temp_fonts[@]}))
-        selected_fonts+=("${temp_fonts[idx]}")
-        
-        # Remove selected font from temp array
-        temp_fonts=("${temp_fonts[@]:0:idx}" "${temp_fonts[@]:$((idx+1))}")
-    done
-    
-    log "🎯 Selected fonts for machine $machine_id: ${selected_fonts[*]}"
-    
-    # Install selected fonts
-    sudo apt update
-    sudo apt install -y "${selected_fonts[@]}"
-    
-    # Install additional font packages for Ubuntu 24.04
-    sudo apt install -y fonts-noto-color-emoji fonts-noto-cjk fonts-noto-cjk-extra
-    
-    # Update font cache
-    fc-cache -fv
-    
-    log "✅ Random fonts installed successfully"
-}
-
-# === RANDOM AUDIO CONFIGURATION ===
-configure_random_audio() {
-    log "🔊 Configuring random audio theme for this machine..."
-    
-    local machine_id
-    machine_id=$(generate_machine_id)
-    
-    # Use machine ID as seed for consistent randomization
-    local seed=$((0x${machine_id:0:8}))
-    RANDOM=$seed
-    
-    # Select random audio theme
-    local audio_theme="${AUDIO_THEMES[$((RANDOM % ${#AUDIO_THEMES[@]}))]}"
-    log "🎵 Selected audio theme for machine $machine_id: $audio_theme"
-    
-    # Install audio packages for Ubuntu 24.04
-    sudo apt install -y pulseaudio pulseaudio-utils alsa-utils sound-theme-freedesktop
-    
-    # Install additional audio themes
-    sudo apt install -y ubuntu-sounds gnome-audio sound-icons
-    
-    # Configure audio theme based on desktop environment
-    case $DESKTOP_ENV in
-        "GNOME"|"Unity")
-            gsettings set org.gnome.desktop.sound theme-name "$audio_theme" 2>/dev/null || true
-            gsettings set org.gnome.desktop.sound event-sounds true 2>/dev/null || true
-            ;;
-        "LXQt"|"LXDE"|"Lubuntu")
-            # Configure for LXQt/LXDE
-            mkdir -p ~/.config/lxqt
-            echo "theme=$audio_theme" >> ~/.config/lxqt/lxqt.conf 2>/dev/null || true
-            ;;
-        "XFCE")
-            # Configure for XFCE
-            xfconf-query -c xsettings -p /Net/SoundThemeName -s "$audio_theme" 2>/dev/null || true
-            xfconf-query -c xsettings -p /Net/EnableEventSounds -s true 2>/dev/null || true
-            ;;
-    esac
-    
-    # Set random volume level (65-80%)
-    local volume=$((RANDOM % 16 + 65))
-    pactl set-sink-volume @DEFAULT_SINK@ ${volume}% 2>/dev/null || true
-    
-    log "✅ Audio configuration completed (Theme: $audio_theme, Volume: ${volume}%)"
-}
-
-# === PYTHON ENVIRONMENT SETUP ===
-setup_python_env() {
-    log "🐍 Setting up Python environment for Ubuntu 24.04..."
-
-    # Install Python and pip if not available
-    if ! command -v python3 &> /dev/null; then
-        sudo apt update && sudo apt install -y python3 python3-pip python3-venv
-    fi
-
-    # For Ubuntu 24.04, use virtual environment (best practice)
-    if [[ ! -d "$HOME/.local/venv" ]]; then
-        python3 -m venv "$HOME/.local/venv"
-    fi
-    
-    # Activate virtual environment and install gdown
-    source "$HOME/.local/venv/bin/activate"
-    pip install --upgrade pip
-    pip install gdown
-    
-    # Create wrapper script for gdown
-    mkdir -p "$HOME/.local/bin"
-    cat > "$HOME/.local/bin/gdown" << 'EOF'
-#!/bin/bash
-source "$HOME/.local/venv/bin/activate"
-exec python -m gdown "$@"
 EOF
-    chmod +x "$HOME/.local/bin/gdown"
+sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
+sudo chmod -R 000 /opt/google/chrome/cron || true
 
-    # Add to PATH if not already there
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        export PATH="$HOME/.local/bin:$PATH"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-    fi
-    
-    log "✅ Python environment setup completed"
-}
+# Tạo shortcut Chrome
+echo "🎨 Tạo shortcut Chrome..."
+cat <<EOF3 > ~/.local/share/applications/browser_custom.desktop
+[Desktop Entry]
+Name=Google Chrome (Custom)
+Exec=/usr/bin/google-chrome-stable %U
+Icon=google-chrome
+Type=Application
+Categories=Network;WebBrowser;
+StartupNotify=true
+EOF3
 
-# === CHROME VERSION SELECTION ===
-get_chrome_file_list() {
-    # Completely silent operation - redirect ALL output to /dev/null
-    local file_list=""
-    local temp_dir="/tmp/chrome_list_$$"
+# Pin vào taskbar
+if command -v gsettings &>/dev/null; then
+    gio set ~/.local/share/applications/browser_custom.desktop metadata::trusted true 2>/dev/null
+    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
+else
+    echo "ℹ️ Trên Lubuntu (LXQt), hãy nhấp phải biểu tượng trong menu -> 'Pin to Panel'."
+fi
 
-    # Try multiple approaches to get the actual file list
+echo "✅ PHẦN 1 HOÀN TẤT! Chrome đã được cài, khóa update và tắt update nội bộ."
+echo ""
 
-    # Approach 1: Use gdown folder with minimal download
-    mkdir -p "$temp_dir" >/dev/null 2>&1 && cd "$temp_dir" >/dev/null 2>&1
+# Deactivate venv trước khi chuyển sang phần 2
+deactivate
 
-    # Try to get file listing with very short timeout first - show output for debugging
-    if timeout 45 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies; then
-        # Look for any .deb files that were downloaded or listed
-        file_list=$(find "$temp_dir" -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
+# ===================================================================
+# PHẦN 2: SETUPVM.BASH - SETUP VM VÀ NEKOBOX
+# ===================================================================
 
-        if [[ -n "$file_list" ]]; then
-            rm -rf "$temp_dir" >/dev/null 2>&1
-            echo "$file_list"
-            return 0
-        fi
-    fi
+echo "⚙️ === PHẦN 2: SETUP VM VÀ NEKOBOX ==="
 
-    # Approach 2: Try with different gdown parameters
-    rm -rf "$temp_dir" >/dev/null 2>&1
-    mkdir -p "$temp_dir" >/dev/null 2>&1 && cd "$temp_dir" >/dev/null 2>&1
+# Update & Upgrade
+echo "🔄 Updating system packages..."
+sudo add-apt-repository universe -y || true
+sudo apt update && sudo apt upgrade -y
 
-    if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok; then
-        file_list=$(find "$temp_dir" -type f -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
+# Install Open VM Tools
+echo "📦 Installing Open VM Tools..."
+sudo apt install -y open-vm-tools open-vm-tools-desktop || echo "⚠️ Warning: Open VM Tools not found for this Ubuntu version."
 
-        if [[ -n "$file_list" ]]; then
-            rm -rf "$temp_dir" >/dev/null 2>&1
-            echo "$file_list"
-            return 0
-        fi
-    fi
+# Install gdown and unzip
+echo "📦 Installing gdown & unzip..."
+sudo apt install -y python3-pip unzip
+if ! command -v pip3 &> /dev/null; then
+    echo "⚠️ pip3 missing, installing..."
+    sudo apt install -y python3-pip
+fi
+sudo apt install python3-venv -y
+python3 -m venv ~/venv
+source ~/venv/bin/activate
+pip install --upgrade pip gdown
 
-    # Clean up
-    rm -rf "$temp_dir" >/dev/null 2>&1
+# Install core build tools and Qt5 libraries
+echo "📦 Installing build tools and Qt5 libraries..."
+sudo apt install -y build-essential \
+libqt5network5 \
+libqt5core5a \
+libqt5gui5 \
+libqt5widgets5 \
+qtbase5-dev \
+libqt5x11extras5 \
+libqt5quick5 \
+libqt5quickwidgets5 \
+libqt5quickparticles5
 
-    # Return empty if failed
-    echo ""
-}
+# Prepare Nekoray folder
+echo "📂 Preparing Nekoray folder..."
+rm -rf ~/Downloads/nekoray
+mkdir -p ~/Downloads/nekoray
 
-select_chrome_version() {
-    # Save stdout to FD 3, then redirect all UI output (including select menus) to stderr
-    exec 3>&1
-    {
-        echo "=============================================="
-        echo "  🌐 CHROME VERSION SELECTION"
-        echo "=============================================="
+# Download Nekobox ZIP from Google Drive
+echo "⬇️ Downloading Nekobox from Google Drive..."
+cd ~/Downloads
 
-        echo ""
-        echo "Chọn chế độ cài đặt Chrome:"
-        echo ""
-        local mode_options=(
-            "Tải bản mới nhất từ Google (Khuyến nghị)"
-            "Chọn phiên bản từ Google Drive"
-        )
+# Thay ID này bằng ID thực tế của file Nekobox trên Google Drive!
+FILE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"  
+gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Download failed! Check Google Drive file ID."; exit 1; }
 
-        select mode in "${mode_options[@]}"; do
-            case $mode in
-                "Tải bản mới nhất từ Google (Khuyến nghị)")
-                    log "🌐 User selected: Download Latest Chrome from official source"
-                    echo "latest" >&3
-                    return 0
-                    ;;
-                "Chọn phiên bản từ Google Drive")
-                    log "📁 User selected: Choose version from Google Drive"
-                    # Chuẩn bị môi trường Python/gdown chỉ khi cần dùng Google Drive
-                    setup_python_env
-                    break
-                    ;;
-                *)
-                    echo "❌ Lựa chọn không hợp lệ, vui lòng chọn 1 hoặc 2."
-                    ;;
-            esac
-        done
+# Extract Nekobox
+echo "📂 Extracting Nekobox..."
+unzip -o nekobox.zip -d ~/Downloads/nekoray
 
-        # Chỉ khi chọn Google Drive mới tiến hành lấy danh sách phiên bản
-        log "🔍 Checking Google Drive for Chrome versions..."
+# Handle nested folders
+inner_dir=$(find ~/Downloads/nekoray -mindepth 1 -maxdepth 1 -type d | head -n 1)
+if [ "$inner_dir" != "" ] && [ "$inner_dir" != "$HOME/Downloads/nekoray" ]; then
+    echo "📂 Adjusting folder structure..."
+    mv "$inner_dir"/* ~/Downloads/nekoray/
+    rm -rf "$inner_dir"
+fi
 
-        local file_list
-        file_list=$(get_chrome_file_list)
+# Grant execution permissions
+echo "🔑 Setting execution permissions..."
+cd ~/Downloads/nekoray
+chmod +x launcher nekobox nekobox_core || echo "⚠️ Some files not found, skipping chmod."
 
-        if [[ -n "$file_list" ]]; then
-            log "✅ Successfully found Chrome files in Google Drive"
-            echo ""
-            echo "📁 Available Chrome versions in your Google Drive folder:"
-            echo ""
-
-            local options=()
-            local file_count=0
-            while IFS= read -r file; do
-                if [[ -n "$file" ]]; then
-                    options+=("$file")
-                    file_count=$((file_count + 1))
-                    echo "   📦 $file"
-                fi
-            done <<< "$file_list"
-
-            echo ""
-            echo "📊 Found $file_count Chrome versions in your Drive folder"
-            echo ""
-            echo "Choose Chrome version to install:"
-            echo ""
-
-            select version in "${options[@]}"; do
-                if [[ -n "$version" ]]; then
-                    log "📦 User selected: $version"
-                    echo "$version" >&3
-                    return 0
-                else
-                    echo "❌ Lựa chọn không hợp lệ, vui lòng chọn số trong danh sách."
-                fi
-            done
-        else
-            # Không lấy được danh sách từ Drive
-            log "⚠️ Could not retrieve file list from Drive folder"
-            log "💡 This might be due to network issues or Drive permissions"
-            echo ""
-            echo "⚠️ Could not access files in Google Drive folder"
-            echo "📡 This might be due to:"
-            echo "   • Network connectivity issues"
-            echo "   • Google Drive folder permissions"
-            echo "   • Folder ID incorrect"
-            echo ""
-            echo "❌ Unable to list Google Drive folder. Aborting installation."
-            echo "Please check network, folder permissions, or CHROME_DRIVE_ID and try again."
-            log "❌ Aborting: Google Drive listing required for version selection"
-            exit 1
-        fi
-    } 1>&2
-}
-
-# === CHROME DOWNLOAD & INSTALLATION ===
-download_latest_chrome() {
-    mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-
-    log "📥 Downloading latest Chrome from official source..."
-
-    # Download with proper error checking
-    if wget -q -O chrome-latest.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"; then
-        # Verify the file was downloaded and has reasonable size (>50MB)
-        if [[ -f "chrome-latest.deb" ]]; then
-            local file_size
-            file_size=$(wc -c < "chrome-latest.deb" 2>/dev/null || echo "0")
-
-            if [[ "$file_size" -gt 50000000 ]]; then
-                log "✅ Successfully downloaded Chrome ($(du -h chrome-latest.deb | cut -f1))"
-                echo "$DOWNLOAD_DIR/chrome-latest.deb"
-                return 0
-            else
-                log "❌ Downloaded file is too small ($file_size bytes)"
-                rm -f chrome-latest.deb 2>/dev/null
-                return 1
-            fi
-        else
-            log "❌ Downloaded file not found"
-            return 1
-        fi
-    else
-        log "❌ Failed to download Chrome from official source"
-        rm -f chrome-latest.deb 2>/dev/null
-        return 1
-    fi
-}
-
-download_specific_chrome_file() {
-    local version="$1"
-
-    # Normalize version string to avoid stray whitespace/CRLF
-    version=$(printf "%s" "$version" | tr -d '\r' | xargs)
-    log "🔎 Version choice normalized: '$version'"
-
-    # Case-insensitive, prefix-tolerant check for 'latest'
-    local version_lc
-    version_lc=$(printf "%s" "$version" | tr 'A-Z' 'a-z')
-    if [[ "$version_lc" == latest* ]]; then
-        local latest_file
-        latest_file=$(download_latest_chrome)
-        if [[ $? -eq 0 && -n "$latest_file" ]]; then
-            echo "$latest_file"
-            return 0
-        else
-            log "❌ Failed to download latest Chrome"
-            return 1
-        fi
-    fi
-
-    mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-
-    log "📥 Downloading Chrome: $version from Google Drive..."
-
-    # Try to download the entire folder with longer timeout for large files
-    log "⏳ This may take a few minutes for large files (100MB+)..."
-    if timeout 600 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies; then
-        # Find the specific file (exact name match)
-        local downloaded_file
-        downloaded_file=$(find "$DOWNLOAD_DIR" -name "$version" | head -n 1)
-
-        if [[ -n "$downloaded_file" && -f "$downloaded_file" ]]; then
-            log "✅ Successfully downloaded: $version"
-            echo "$downloaded_file"
-            return 0
-        else
-            log "❌ File $version not found in downloaded folder"
-        fi
-    else
-        log "❌ Failed to download from Google Drive (timeout or network error)"
-    fi
-
-    # Do not fallback to latest; require Drive file when selected
-    log "❌ Drive download failed and fallback is disabled. Aborting."
-    return 1
-}
-
-# === CHROME REMOVAL ===
-remove_existing_chrome() {
-    log "🗑️ Removing existing Chrome installations..."
-
-    # Remove Chrome packages
-    sudo apt remove --purge -y google-chrome-stable google-chrome-beta google-chrome-unstable 2>/dev/null || true
-    sudo snap remove chromium 2>/dev/null || true
-    sudo flatpak uninstall -y com.google.Chrome 2>/dev/null || true
-
-    # Remove Chrome directories
-    sudo rm -rf /opt/google/chrome* 2>/dev/null || true
-    rm -rf ~/.config/google-chrome* 2>/dev/null || true
-    rm -rf ~/.cache/google-chrome* 2>/dev/null || true
-
-    # Remove desktop entries
-    sudo rm -f /usr/share/applications/google-chrome*.desktop 2>/dev/null || true
-    rm -f ~/.local/share/applications/google-chrome*.desktop 2>/dev/null || true
-
-    # Clean up package cache
-    sudo apt autoremove -y 2>/dev/null || true
-    sudo apt autoclean 2>/dev/null || true
-
-    log "✅ Chrome removal completed"
-}
-
-# === CHROME INSTALLATION ===
-install_chrome() {
-    local chrome_file="$1"
-
-    log "🔧 Installing Chrome from: $chrome_file"
-
-    # Install dependencies for Ubuntu 24.04
-    sudo apt update
-    sudo apt install -y wget gnupg software-properties-common apt-transport-https ca-certificates curl
-
-    # Add Chrome repository for Ubuntu 24.04 (using new method, apt-key is deprecated)
-    wget -q -O /tmp/google-chrome-key.gpg https://dl.google.com/linux/linux_signing_key.pub
-    sudo gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg /tmp/google-chrome-key.gpg 2>/dev/null || true
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-    rm -f /tmp/google-chrome-key.gpg
-
-    # Install Chrome package
-    sudo dpkg -i "$chrome_file" || sudo apt install -f -y
-
-    # Fix any dependency issues for Ubuntu 24.04
-    sudo apt update && sudo apt install -f -y
-
-    log "✅ Chrome installation completed"
-}
-
-# === NEKOBOX INSTALLATION ===
-install_nekobox() {
-    log "🔧 Installing Nekobox..."
-
-    setup_python_env
-
-    mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-
-    # Download Nekobox from Google Drive
-    log "📥 Downloading Nekobox from Google Drive..."
-    timeout 300 gdown --folder "https://drive.google.com/drive/folders/$NEKOBOX_DRIVE_ID" --no-cookies
-
-    # Find Nekobox/Nekoray installation file (case-insensitive, include archives)
-    local nekobox_file
-    nekobox_file=$(find "$DOWNLOAD_DIR" -type f \
-        \( -iname "*nekobox*.deb" -o -iname "*nekoray*.deb" \
-           -o -iname "*nekobox*.appimage" -o -iname "*nekoray*.appimage" \
-           -o -iname "*nekobox*.zip" -o -iname "*nekoray*.zip" \
-           -o -iname "*nekobox*.tar.gz" -o -iname "*nekoray*.tar.gz" \) \
-        | head -n 1)
-
-    if [[ -z "$nekobox_file" ]]; then
-        log "❌ Nekobox installation file not found"
-        return 1
-    fi
-
-    log "📦 Found Nekobox package: $nekobox_file"
-
-    # Install Nekobox/Nekoray
-    if [[ "$nekobox_file" == *.deb ]]; then
-        sudo dpkg -i "$nekobox_file" || sudo apt install -f -y
-    elif [[ "$nekobox_file" == *.AppImage || "$nekobox_file" == *.appimage ]]; then
-        chmod +x "$nekobox_file"
-        sudo mkdir -p /opt/nekobox
-        sudo mv -f "$nekobox_file" /opt/nekobox/NekoBox.AppImage
-        # Create wrapper to ensure correct working directory
-        local exe="/opt/nekobox/NekoBox.AppImage"
-        local dir="/opt/nekobox"
-        sudo tee /usr/local/bin/nekobox >/dev/null <<EOF
-#!/bin/bash
-cd "$dir"
-exec "$exe" "$@"
+# Create desktop shortcut
+echo "🖥️ Creating desktop shortcut..."
+cat <<EOF > ~/Desktop/nekoray.desktop
+[Desktop Entry]
+Version=1.0
+Name=Nekobox
+Comment=Open Nekobox
+Exec=$HOME/Downloads/nekoray/nekobox
+Icon=$HOME/Downloads/nekoray/nekobox.png
+Terminal=false
+Type=Application
+Categories=Utility;
 EOF
-        sudo chmod +x /usr/local/bin/nekobox
-    elif [[ "$nekobox_file" == *.zip ]]; then
-        # Ensure unzip is available
-        if ! command -v unzip >/dev/null 2>&1; then
-            sudo apt update && sudo apt install -y unzip
-        fi
-        local install_dir="/opt/nekobox"
-        sudo mkdir -p "$install_dir"
-        sudo unzip -o "$nekobox_file" -d "$install_dir"
-        # Try to locate executable inside extracted folder
-        local exe
-        exe=$(sudo find "$install_dir" -type f \( -iname "nekobox" -o -iname "nekoray" -o -iname "NekoBox" -o -iname "NekoRay" -o -iname "*.AppImage" \) | head -n 1)
-        if [[ -n "$exe" ]]; then
-            sudo chmod +x "$exe" || true
-            sudo ln -sf "$exe" /usr/local/bin/nekobox
-        else
-            log "⚠️ Could not find executable inside zip; creating generic launcher"
-            # Fallback: if there's a single directory, use its run script if present
-            exe=$(sudo find "$install_dir" -maxdepth 2 -type f -iname "run.sh" | head -n 1)
-            if [[ -n "$exe" ]]; then
-                sudo chmod +x "$exe"
-                sudo ln -sf "$exe" /usr/local/bin/nekobox
-            else
-                log "❌ No executable found after extraction"
-                return 1
-            fi
-        fi
-    elif [[ "$nekobox_file" == *.tar.gz || "$nekobox_file" == *.tgz ]]; then
-        local install_dir="/opt/nekobox"
-        sudo mkdir -p "$install_dir"
-        sudo tar -xzf "$nekobox_file" -C "$install_dir"
-        local exe
-        exe=$(sudo find "$install_dir" -type f \( -iname "nekobox" -o -iname "nekoray" -o -iname "NekoBox" -o -iname "NekoRay" -o -iname "*.AppImage" \) | head -n 1)
-        if [[ -n "$exe" ]]; then
-            sudo chmod +x "$exe" || true
-            sudo ln -sf "$exe" /usr/local/bin/nekobox
-        else
-            log "❌ No executable found after tar extraction"
-            return 1
-        fi
-    else
-        # Generic: assume it's an executable file
-        chmod +x "$nekobox_file" 2>/dev/null || true
-        sudo cp -f "$nekobox_file" /usr/local/bin/nekobox
-    fi
 
-    create_nekobox_shortcut
-    setup_nekobox_integration
-    log "✅ Nekobox installation completed"
+chmod +x ~/Desktop/nekoray.desktop
+
+echo "📌 Pinning Nekobox to taskbar and enabling autostart..."
+
+# Pin vào taskbar theo môi trường Desktop
+if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
+    echo "📌 Ubuntu GNOME detected - pinning Nekobox to taskbar..."
+    gsettings set org.gnome.shell favorite-apps \
+    "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
+elif echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
+    echo "📌 Lubuntu LXQt detected - LXQt không hỗ trợ auto pin, bạn có thể kéo shortcut vào panel thủ công."
+else
+    echo "ℹ️ Unknown desktop environment: $XDG_CURRENT_DESKTOP - skipping auto pinning."
+fi
+
+# Autostart cho cả Ubuntu & Lubuntu
+mkdir -p ~/.config/autostart
+cp ~/Desktop/nekoray.desktop ~/.config/autostart/nekoray.desktop
+chmod +x ~/.config/autostart/nekoray.desktop
+
+echo "✅ Nekobox pinned to taskbar (Ubuntu GNOME) and set to autostart."
+
+# Launch Nekobox
+echo "🚀 Launching Nekobox..."
+./nekobox || echo "⚠️ Unable to launch Nekobox automatically. Start manually from ~/Downloads/nekoray."
+
+echo "✅ PHẦN 2 HOÀN TẤT! Setup VM và Nekobox thành công!"
+echo ""
+
+# Deactivate venv trước khi chuyển sang phần 3
+deactivate
+
+# ===================================================================
+# PHẦN 3: FIX_PASSWORD_ISSUES.SH - SỬA VẤN ĐỀ PASSWORD
+# ===================================================================
+
+echo "🔧 === PHẦN 3: SỬA TẤT CẢ VẤN ĐỀ PASSWORD ==="
+
+echo "🔧 Đang sửa tất cả vấn đề password..."
+
+# 1. XÓA PASSWORD CỦA USER HIỆN TẠI
+echo "🔓 Xóa password user..."
+sudo passwd -d $USER
+
+# 2. CẤU HÌNH SUDO KHÔNG CẦN PASSWORD
+echo "⚡ Cấu hình sudo không cần password..."
+echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$USER
+
+# 3. CẤU HÌNH AUTO-LOGIN CHO LIGHTDM (LUBUNTU)
+echo "🚀 Cấu hình auto-login cho LightDM..."
+sudo mkdir -p /etc/lightdm/lightdm.conf.d
+sudo tee /etc/lightdm/lightdm.conf.d/50-autologin.conf << EOF
+[Seat:*]
+autologin-user=$USER
+autologin-user-timeout=0
+autologin-session=Lubuntu
+EOF
+
+# 4. CẤU HÌNH AUTO-LOGIN CHO GDM3 (UBUNTU)
+echo "🚀 Cấu hình auto-login cho GDM3..."
+sudo tee /etc/gdm3/custom.conf << EOF
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=$USER
+
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
+# 5. TẮT HOÀN TOÀN GNOME KEYRING
+echo "🔑 Tắt GNOME Keyring..."
+sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
+sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
+
+# 6. XÓA TẤT CẢ KEYRING DATA
+echo "🗑️ Xóa keyring data..."
+rm -rf ~/.local/share/keyrings 2>/dev/null || true
+rm -rf ~/.gnupg 2>/dev/null || true
+rm -rf ~/.config/kwalletrc 2>/dev/null || true
+
+# 7. TẮT PAM KEYRING
+echo "🔒 Tắt PAM keyring..."
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/login 2>/dev/null || true
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/passwd 2>/dev/null || true
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-password 2>/dev/null || true
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-autologin 2>/dev/null || true
+
+# 8. TẮT POLICYKIT PASSWORD PROMPTS
+echo "🛡️ Tắt PolicyKit prompts..."
+sudo mkdir -p /etc/polkit-1/localauthority/50-local.d
+sudo tee /etc/polkit-1/localauthority/50-local.d/disable-passwords.pkla << EOF
+[Disable password prompts for $USER]
+Identity=unix-user:$USER
+Action=*
+ResultActive=yes
+ResultInactive=yes
+ResultAny=yes
+EOF
+
+# 9. CẤU HÌNH CHROME KHÔNG YÊU CẦU PASSWORD
+echo "🌐 Cấu hình Chrome..."
+mkdir -p ~/.config/google-chrome/Default
+cat > ~/.config/google-chrome/Default/Preferences << 'EOF'
+{
+   "profile": {
+      "password_manager_enabled": false,
+      "default_content_setting_values": {
+         "password_manager": 2
+      }
+   }
 }
+EOF
 
-# === SHORTCUT CREATION ===
-create_chrome_shortcut() {
-    mkdir -p ~/.local/share/applications
-    cat > ~/.local/share/applications/google-chrome.desktop << EOF
+# 10. CẤU HÌNH FIREFOX KHÔNG YÊU CẦU PASSWORD
+echo "🦊 Cấu hình Firefox..."
+# Tạo profile Firefox nếu chưa có
+firefox -CreateProfile "default" 2>/dev/null || true
+sleep 2
+pkill firefox 2>/dev/null || true
+
+# Tìm Firefox profile directory
+FF_PROFILE=$(find ~/.mozilla/firefox -name "*.default*" -type d 2>/dev/null | head -n 1)
+if [[ -n "$FF_PROFILE" ]]; then
+    cat > "$FF_PROFILE/user.js" << 'EOF'
+user_pref("security.ask_for_password", 0);
+user_pref("security.password_lifetime", 9999);
+user_pref("signon.rememberSignons", false);
+user_pref("security.default_personal_cert", "");
+EOF
+fi
+
+# 11. TẮT SYSTEMD USER SERVICES CÓ THỂ GÂY PROMPT
+echo "⚙️ Tắt các service không cần thiết..."
+systemctl --user disable gnome-keyring-daemon 2>/dev/null || true
+systemctl --user stop gnome-keyring-daemon 2>/dev/null || true
+
+# 12. XÓA CHROME KEYRING INTEGRATION
+echo "🔧 Xóa Chrome keyring integration..."
+sudo rm -f /usr/share/applications/google-chrome.desktop 2>/dev/null || true
+cat > ~/.local/share/applications/google-chrome.desktop << 'EOF'
 [Desktop Entry]
 Version=1.0
 Name=Google Chrome
@@ -613,721 +366,32 @@ Categories=Network;WebBrowser;
 MimeType=text/html;text/xml;application/xhtml+xml;
 EOF
 
-    chmod +x ~/.local/share/applications/google-chrome.desktop
-    log "✅ Chrome shortcut created"
-}
+chmod +x ~/.local/share/applications/google-chrome.desktop
 
-# === CHROME TASKBAR & DEFAULT BROWSER ===
-setup_chrome_integration() {
-    log "📌 Setting up Chrome integration..."
-
-    # Set Chrome as default browser
-    if command -v xdg-settings &> /dev/null; then
-        xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || true
-        log "✅ Chrome set as default browser"
-    fi
-
-    # Pin Chrome to taskbar based on desktop environment
-    case $DESKTOP_ENV in
-        "GNOME"|"Unity")
-            # Pin to GNOME dock/favorites
-            if command -v gsettings &> /dev/null; then
-                local current_favorites
-                current_favorites=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null || echo "[]")
-
-                # Add Chrome to favorites if not already there
-                if [[ "$current_favorites" != *"google-chrome.desktop"* ]]; then
-                    # Remove closing bracket and add Chrome
-                    local new_favorites="${current_favorites%]}, 'google-chrome.desktop']"
-                    gsettings set org.gnome.shell favorite-apps "$new_favorites" 2>/dev/null || true
-                    log "✅ Chrome pinned to GNOME dock"
-                fi
-            fi
-            ;;
-
-        "LXQt"|"LXDE"|"Lubuntu")
-            # Pin to LXQt panel
-            local panel_config="$HOME/.config/lxqt/panel.conf"
-            if [[ -f "$panel_config" ]]; then
-                # Backup original config
-                cp "$panel_config" "$panel_config.backup" 2>/dev/null || true
-
-                # Add Chrome to quicklaunch if section exists
-                if grep -q "\[quicklaunch\]" "$panel_config" 2>/dev/null; then
-                    # Add Chrome to existing quicklaunch
-                    if ! grep -q "google-chrome.desktop" "$panel_config" 2>/dev/null; then
-                        sed -i '/\[quicklaunch\]/a apps\\1\\desktop=/usr/share/applications/google-chrome.desktop' "$panel_config" 2>/dev/null || true
-                        log "✅ Chrome added to LXQt panel"
-                    fi
-                else
-                    # Create quicklaunch section
-                    echo "" >> "$panel_config"
-                    echo "[quicklaunch]" >> "$panel_config"
-                    echo "apps\\1\\desktop=/usr/share/applications/google-chrome.desktop" >> "$panel_config"
-                    echo "apps\\size=1" >> "$panel_config"
-                    log "✅ Chrome pinned to LXQt panel"
-                fi
-            fi
-            ;;
-    esac
-}
-
-# === CHROME AUTO-UPDATE BLOCKING ===
-block_chrome_updates() {
-    log "🛡️ Blocking Chrome auto-updates completely..."
-
-    # Method 1: Disable Google Update Services
-    log "🔧 Disabling Google Update services..."
-    sudo systemctl stop google-chrome-updater 2>/dev/null || true
-    sudo systemctl disable google-chrome-updater 2>/dev/null || true
-    sudo systemctl mask google-chrome-updater 2>/dev/null || true
-
-    # Remove Google Update components
-    sudo rm -rf /opt/google/chrome/cron 2>/dev/null || true
-    sudo rm -f /etc/cron.daily/google-chrome 2>/dev/null || true
-    sudo rm -f /etc/cron.hourly/google-chrome 2>/dev/null || true
-
-    # Method 2: Block Update URLs in hosts file
-    log "🚫 Blocking Chrome update URLs..."
-    sudo cp /etc/hosts /etc/hosts.backup 2>/dev/null || true
-
-    # Add Chrome update blocking entries
-    cat << 'EOF' | sudo tee -a /etc/hosts >/dev/null
-# Chrome Update Blocking - Added by Setup Script
-127.0.0.1 update.googleapis.com
-127.0.0.1 clients2.google.com
-127.0.0.1 clients.google.com
-127.0.0.1 dl.google.com
-127.0.0.1 edgedl.me.gvt1.com
-127.0.0.1 update.chrome.com
-127.0.0.1 chrome-devtools-frontend.appspot.com
-127.0.0.1 tools.google.com
-127.0.0.1 redirector.gvt1.com
-127.0.0.1 www.google.com/chrome/browser/desktop/index.html
-EOF
-
-    # Method 3: Hold Chrome package version with apt
-    log "🔒 Locking Chrome package version..."
-    sudo apt-mark hold google-chrome-stable 2>/dev/null || true
-
-    # Method 4: Remove Chrome repository to prevent updates
-    log "📦 Removing Chrome repository..."
-    sudo rm -f /etc/apt/sources.list.d/google-chrome.list 2>/dev/null || true
-    sudo rm -f /usr/share/keyrings/google-chrome-keyring.gpg 2>/dev/null || true
-
-    # Method 5: Configure Chrome policies to disable updates
-    log "⚙️ Configuring Chrome policies..."
-    sudo mkdir -p /etc/opt/chrome/policies/managed
-    sudo tee /etc/opt/chrome/policies/managed/disable_updates.json >/dev/null << 'EOF'
-{
-    "AutoUpdateCheckPeriodMinutes": 0,
-    "UpdatesSuppressed": {
-        "StartHour": 0,
-        "StartMinute": 0,
-        "DurationMin": 1440
-    },
-    "ComponentUpdatesEnabled": false,
-    "BackgroundModeEnabled": false,
-    "DefaultBrowserSettingEnabled": false
-}
-EOF
-
-    # Method 6: Set file permissions to prevent update
-    log "🔐 Setting protective file permissions..."
-    sudo chmod 444 /etc/opt/chrome/policies/managed/disable_updates.json 2>/dev/null || true
-
-    # Method 7: Create Chrome launcher script that bypasses update checks
-    log "🚀 Creating update-bypass launcher..."
-    sudo tee /usr/local/bin/chrome-no-update >/dev/null << 'EOF'
-#!/bin/bash
-# Chrome launcher with update blocking
-export GOOGLE_API_KEY=""
-export GOOGLE_DEFAULT_CLIENT_ID=""
-export GOOGLE_DEFAULT_CLIENT_SECRET=""
-exec /usr/bin/google-chrome-stable --disable-background-networking --disable-background-timer-updates --disable-client-side-phishing-detection --disable-component-update --disable-default-apps --disable-sync --no-default-browser-check --no-first-run --disable-background-mode "$@"
-EOF
-
-    sudo chmod +x /usr/local/bin/chrome-no-update
-
-    # Method 8: Update desktop shortcut to use no-update launcher
-    log "🖥️ Updating desktop shortcut..."
-    sed -i 's|Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/chrome-no-update|g' ~/.local/share/applications/google-chrome.desktop 2>/dev/null || true
-
-    # Method 9: Block update processes
-    log "🛑 Creating update process blocker..."
-    sudo tee /usr/local/bin/block-chrome-updates >/dev/null << 'EOF'
-#!/bin/bash
-# Kill any Chrome update processes
-while true; do
-    pkill -f "GoogleUpdate" 2>/dev/null || true
-    pkill -f "chrome.*update" 2>/dev/null || true
-    pkill -f "google-chrome.*update" 2>/dev/null || true
-    sleep 60
-done
-EOF
-
-    sudo chmod +x /usr/local/bin/block-chrome-updates
-
-    # Create systemd service for update blocker
-    sudo tee /etc/systemd/system/block-chrome-updates.service >/dev/null << 'EOF'
-[Unit]
-Description=Block Chrome Updates
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/block-chrome-updates
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    sudo systemctl enable block-chrome-updates.service 2>/dev/null || true
-    sudo systemctl start block-chrome-updates.service 2>/dev/null || true
-
-    # Method 10: Create verification script
-    log "✅ Creating update block verification..."
-    tee ~/check-chrome-updates.sh >/dev/null << 'EOF'
-#!/bin/bash
-echo "=== Chrome Update Block Status ==="
-echo "1. Package hold status:"
-apt-mark showhold | grep chrome || echo "   No holds found"
-echo ""
-echo "2. Blocked URLs in hosts:"
-grep -c "update.googleapis.com" /etc/hosts || echo "   No blocks found"
-echo ""
-echo "3. Chrome policies:"
-ls -la /etc/opt/chrome/policies/managed/ 2>/dev/null || echo "   No policies found"
-echo ""
-echo "4. Update blocker service:"
-systemctl is-active block-chrome-updates.service 2>/dev/null || echo "   Service not running"
-echo ""
-echo "5. Chrome version:"
-google-chrome-stable --version 2>/dev/null || echo "   Chrome not found"
-EOF
-
-    chmod +x ~/check-chrome-updates.sh
-
-    log "✅ Chrome auto-update blocking completed!"
-    log "📋 Run ~/check-chrome-updates.sh to verify blocking status"
-}
-
-# === CREATE SYSTEM VERIFICATION SCRIPT ===
-create_verification_script() {
-    log "📋 Creating system verification script..."
-
-    tee ~/check-system-setup.sh >/dev/null << 'EOF'
-#!/bin/bash
-
-echo "=============================================="
-echo "  🔍 SYSTEM SETUP VERIFICATION"
-echo "=============================================="
+echo "✅ PHẦN 3 HOÀN TẤT! Đã sửa tất cả vấn đề password!"
 echo ""
 
-# Machine ID
-echo "🆔 Machine ID:"
-if [[ -f ~/.machine_id ]]; then
-    echo "   $(cat ~/.machine_id)"
-else
-    echo "   ❌ Machine ID not found"
+# ===================================================================
+# KẾT THÚC SCRIPT TỔNG HỢP
+# ===================================================================
+
+echo "🎉 === HOÀN TẤT TẤT CẢ 3 PHẦN ==="
+echo ""
+echo "📋 Tóm tắt những gì đã thực hiện:"
+echo "   ✅ Phần 1: Cài đặt Chrome cũ và khóa update"
+echo "   ✅ Phần 2: Setup VM tools và Nekobox"
+echo "   ✅ Phần 3: Fix tất cả vấn đề password"
+echo ""
+echo "🔄 BẮT BUỘC PHẢI KHỞI ĐỘNG LẠI để áp dụng:"
+echo "   sudo reboot"
+echo ""
+echo "📋 Sau khi reboot:"
+echo "   ✅ Máy tự động vào desktop (không cần password)"
+echo "   ✅ Sudo commands chạy không cần password"
+echo "   ✅ Chrome/Firefox mở không hỏi master password"
+echo "   ✅ Nekobox tự động khởi động"
+echo ""
+read -p "🔄 Khởi động lại ngay bây giờ? (y/n): " -r
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    sudo reboot
 fi
-echo ""
-
-# Random Fonts Check
-echo "🎨 Random Fonts Status:"
-echo "   Selected fonts for this machine:"
-MACHINE_ID=$(cat ~/.machine_id 2>/dev/null || echo "unknown")
-echo "   Machine ID: $MACHINE_ID"
-
-echo ""
-echo "   Installed font packages:"
-dpkg -l | grep -E "fonts-(noto|liberation|dejavu|ubuntu|roboto|open-sans|lato|source-code|fira|cascadia|jetbrains|hack|inconsolata|droid)" | awk '{print "   ✅ " $2}'
-
-echo ""
-echo "   Available fonts in system:"
-fc-list | grep -E "(Noto|Liberation|DejaVu|Ubuntu|Roboto|Open Sans|Lato|Source Code|Fira|Cascadia|JetBrains|Hack|Inconsolata|Droid)" | wc -l | awk '{print "   📊 Total fonts available: " $1}'
-
-echo ""
-
-# Random Audio Check
-echo "🔊 Random Audio Status:"
-DESKTOP_ENV=""
-if [[ -n "${XDG_CURRENT_DESKTOP:-}" ]]; then
-    DESKTOP_ENV="$XDG_CURRENT_DESKTOP"
-elif [[ -n "${DESKTOP_SESSION:-}" ]]; then
-    DESKTOP_ENV="$DESKTOP_SESSION"
-fi
-
-case "$DESKTOP_ENV" in
-    *"GNOME"*|*"gnome"*)
-        echo "   Desktop: GNOME"
-        AUDIO_THEME=$(gsettings get org.gnome.desktop.sound theme-name 2>/dev/null || echo "not-set")
-        echo "   Audio theme: $AUDIO_THEME"
-        SOUND_ENABLED=$(gsettings get org.gnome.desktop.sound event-sounds 2>/dev/null || echo "not-set")
-        echo "   Sound events: $SOUND_ENABLED"
-        ;;
-    *"LXQt"*|*"lxqt"*|*"Lubuntu"*)
-        echo "   Desktop: LXQt/Lubuntu"
-        if [[ -f ~/.config/lxqt/lxqt.conf ]]; then
-            AUDIO_THEME=$(grep "theme=" ~/.config/lxqt/lxqt.conf 2>/dev/null | cut -d'=' -f2 || echo "not-set")
-            echo "   Audio theme: $AUDIO_THEME"
-        else
-            echo "   ❌ LXQt config not found"
-        fi
-        ;;
-    *)
-        echo "   Desktop: $DESKTOP_ENV"
-        echo "   ⚠️ Audio theme detection not supported for this desktop"
-        ;;
-esac
-
-# Volume check
-VOLUME=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oP '\d+%' | head -1 || echo "unknown")
-echo "   Current volume: $VOLUME"
-
-echo ""
-
-# Audio packages check
-echo "   Installed audio packages:"
-dpkg -l | grep -E "(pulseaudio|alsa-utils|ubuntu-sounds|gnome-audio|sound-)" | awk '{print "   ✅ " $2}'
-
-echo ""
-
-# Chrome Status
-echo "🌐 Chrome Status:"
-if command -v google-chrome-stable &> /dev/null; then
-    CHROME_VERSION=$(google-chrome-stable --version 2>/dev/null)
-    echo "   ✅ $CHROME_VERSION"
-
-    # Check if Chrome is default browser
-    DEFAULT_BROWSER=$(xdg-settings get default-web-browser 2>/dev/null || echo "unknown")
-    echo "   Default browser: $DEFAULT_BROWSER"
-
-    # Check update blocking
-    UPDATE_BLOCKS=$(grep -c "update.googleapis.com" /etc/hosts 2>/dev/null || echo "0")
-    echo "   Update blocks in hosts: $UPDATE_BLOCKS"
-
-    PACKAGE_HOLD=$(apt-mark showhold | grep chrome | wc -l)
-    echo "   Package holds: $PACKAGE_HOLD"
-else
-    echo "   ❌ Chrome not installed"
-fi
-
-echo ""
-
-# NekoBox Status
-echo "🔧 NekoBox Status:"
-if [[ -f /usr/local/bin/nekobox ]]; then
-    echo "   ✅ NekoBox installed at /usr/local/bin/nekobox"
-
-    # Check autostart
-    if [[ -f ~/.config/autostart/nekobox.desktop ]]; then
-        echo "   ✅ Autostart configured"
-    else
-        echo "   ❌ Autostart not configured"
-    fi
-
-    # Check if running
-    if pgrep -f nekobox > /dev/null; then
-        echo "   ✅ NekoBox is running"
-    else
-        echo "   ⚠️ NekoBox is not running"
-    fi
-else
-    echo "   ❌ NekoBox not installed"
-fi
-
-echo ""
-
-# Password-free status
-echo "🔐 Password-free Status:"
-if sudo -n true 2>/dev/null; then
-    echo "   ✅ Sudo works without password"
-else
-    echo "   ❌ Sudo still requires password"
-fi
-
-# Check auto-login
-if [[ -f /etc/lightdm/lightdm.conf.d/50-autologin.conf ]] || [[ -f /etc/gdm3/custom.conf ]]; then
-    echo "   ✅ Auto-login configured"
-else
-    echo "   ❌ Auto-login not configured"
-fi
-
-echo ""
-echo "=============================================="
-echo "  📊 VERIFICATION COMPLETE"
-echo "=============================================="
-echo ""
-echo "💡 Tips:"
-echo "   • Test fonts: Open LibreOffice and check font list"
-echo "   • Test audio: Run 'paplay /usr/share/sounds/alsa/Front_Left.wav'"
-echo "   • Check Chrome updates: Run '~/check-chrome-updates.sh'"
-echo ""
-EOF
-
-    chmod +x ~/check-system-setup.sh
-    log "✅ Verification script created: ~/check-system-setup.sh"
-}
-
-create_nekobox_shortcut() {
-    mkdir -p ~/.local/share/applications
-    cat > ~/.local/share/applications/nekobox.desktop << EOF
-[Desktop Entry]
-Version=1.0
-Name=NekoBox
-Comment=Proxy client
-Exec=/usr/local/bin/nekobox
-Icon=nekobox
-Terminal=false
-Type=Application
-Categories=Network;
-EOF
-
-    chmod +x ~/.local/share/applications/nekobox.desktop
-    log "✅ Nekobox shortcut created"
-}
-
-# === NEKOBOX AUTOSTART & TASKBAR ===
-setup_nekobox_integration() {
-    log "🚀 Setting up NekoBox integration..."
-
-    # Create autostart entry
-    mkdir -p ~/.config/autostart
-    cat > ~/.config/autostart/nekobox.desktop << EOF
-[Desktop Entry]
-Version=1.0
-Name=NekoBox
-Comment=Proxy client - Auto start
-Exec=/usr/local/bin/nekobox
-Icon=nekobox
-Terminal=false
-Type=Application
-Categories=Network;
-X-GNOME-Autostart-enabled=true
-Hidden=false
-NoDisplay=false
-EOF
-
-    chmod +x ~/.config/autostart/nekobox.desktop
-    log "✅ NekoBox autostart configured"
-
-    # Pin NekoBox to taskbar based on desktop environment
-    case $DESKTOP_ENV in
-        "GNOME"|"Unity")
-            # Pin to GNOME dock/favorites
-            if command -v gsettings &> /dev/null; then
-                local current_favorites
-                current_favorites=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null || echo "[]")
-
-                # Add NekoBox to favorites if not already there
-                if [[ "$current_favorites" != *"nekobox.desktop"* ]]; then
-                    # Remove closing bracket and add NekoBox
-                    local new_favorites="${current_favorites%]}, 'nekobox.desktop']"
-                    gsettings set org.gnome.shell favorite-apps "$new_favorites" 2>/dev/null || true
-                    log "✅ NekoBox pinned to GNOME dock"
-                fi
-            fi
-            ;;
-
-        "LXQt"|"LXDE"|"Lubuntu")
-            # Pin to LXQt panel
-            local panel_config="$HOME/.config/lxqt/panel.conf"
-            if [[ -f "$panel_config" ]]; then
-                # Add NekoBox to quicklaunch
-                if grep -q "\[quicklaunch\]" "$panel_config" 2>/dev/null; then
-                    # Add NekoBox to existing quicklaunch
-                    if ! grep -q "nekobox.desktop" "$panel_config" 2>/dev/null; then
-                        # Count existing apps and add NekoBox
-                        local app_count=$(grep -c "apps\\\\.*\\\\desktop=" "$panel_config" 2>/dev/null || echo "0")
-                        local next_num=$((app_count + 1))
-                        sed -i "/\[quicklaunch\]/a apps\\\\${next_num}\\\\desktop=$HOME/.local/share/applications/nekobox.desktop" "$panel_config" 2>/dev/null || true
-                        sed -i "s/apps\\\\size=.*/apps\\\\size=${next_num}/" "$panel_config" 2>/dev/null || true
-                        log "✅ NekoBox added to LXQt panel"
-                    fi
-                else
-                    # Create quicklaunch section with NekoBox
-                    echo "" >> "$panel_config"
-                    echo "[quicklaunch]" >> "$panel_config"
-                    echo "apps\\1\\desktop=$HOME/.local/share/applications/nekobox.desktop" >> "$panel_config"
-                    echo "apps\\size=1" >> "$panel_config"
-                    log "✅ NekoBox pinned to LXQt panel"
-                fi
-            fi
-            ;;
-    esac
-
-    # Create system tray configuration for NekoBox
-    mkdir -p ~/.config/nekobox 2>/dev/null || true
-    cat > ~/.config/nekobox/config.json << 'EOF' 2>/dev/null || true
-{
-    "start_minimized": true,
-    "minimize_to_tray": true,
-    "close_to_tray": true,
-    "auto_start": true
-}
-EOF
-
-    log "✅ NekoBox system tray configured"
-}
-
-# === PASSWORD ISSUES FIX ===
-fix_password_issues() {
-    log "🔧 Fixing all password issues..."
-
-    # 1. Remove password for current user
-    log "🔓 Removing user password..."
-    sudo passwd -d $USER
-
-    # 2. Configure sudo without password
-    log "⚡ Configuring sudo without password..."
-    echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$USER
-
-    # 3. Configure auto-login based on desktop environment and Ubuntu version
-    detect_desktop_environment
-
-    case $DESKTOP_ENV in
-        "LXQt"|"LXDE"|"Lubuntu")
-            log "🚀 Configuring auto-login for LightDM (Lubuntu 24.04)..."
-            sudo mkdir -p /etc/lightdm/lightdm.conf.d
-
-            # Ubuntu 24.04 LXQt session name
-            local session_name="lxqt"
-            if [[ "$DESKTOP_ENV" == "LXDE" ]]; then
-                session_name="LXDE"
-            elif [[ "$DESKTOP_ENV" == "Lubuntu" ]]; then
-                session_name="Lubuntu"
-            fi
-
-            sudo tee /etc/lightdm/lightdm.conf.d/50-autologin.conf << EOF
-[Seat:*]
-autologin-user=$USER
-autologin-user-timeout=0
-autologin-session=$session_name
-user-session=$session_name
-EOF
-            ;;
-
-        "GNOME"|"Unity"|*)
-            log "🚀 Configuring auto-login for GDM3 (Ubuntu 24.04)..."
-            sudo tee /etc/gdm3/custom.conf << EOF
-[daemon]
-AutomaticLoginEnable=true
-AutomaticLogin=$USER
-WaylandEnable=false
-
-[security]
-
-[xdmcp]
-
-[chooser]
-
-[debug]
-EOF
-            ;;
-    esac
-
-    # 4. Disable GNOME Keyring completely
-    log "🔑 Disabling GNOME Keyring..."
-    sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
-    sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
-
-    # 5. Remove all keyring data
-    log "🗑️ Removing keyring data..."
-    rm -rf ~/.local/share/keyrings 2>/dev/null || true
-    rm -rf ~/.gnupg 2>/dev/null || true
-    rm -rf ~/.config/kwalletrc 2>/dev/null || true
-
-    # 6. Disable PAM keyring
-    log "🔒 Disabling PAM keyring..."
-    sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/login 2>/dev/null || true
-    sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/passwd 2>/dev/null || true
-    sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-password 2>/dev/null || true
-    sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-autologin 2>/dev/null || true
-
-    # 7. Disable PolicyKit password prompts
-    log "🛡️ Disabling PolicyKit prompts..."
-    sudo mkdir -p /etc/polkit-1/localauthority/50-local.d
-    sudo tee /etc/polkit-1/localauthority/50-local.d/disable-passwords.pkla << EOF
-[Disable password prompts for $USER]
-Identity=unix-user:$USER
-Action=*
-ResultActive=yes
-ResultInactive=yes
-ResultAny=yes
-EOF
-
-    # 8. Configure Chrome without password requirements
-    log "🌐 Configuring Chrome..."
-    mkdir -p ~/.config/google-chrome/Default
-    cat > ~/.config/google-chrome/Default/Preferences << 'EOF'
-{
-   "profile": {
-      "password_manager_enabled": false,
-      "default_content_setting_values": {
-         "password_manager": 2
-      }
-   }
-}
-EOF
-
-    # 9. Disable systemd user services that may cause prompts
-    log "⚙️ Disabling unnecessary services..."
-    systemctl --user disable gnome-keyring-daemon 2>/dev/null || true
-    systemctl --user stop gnome-keyring-daemon 2>/dev/null || true
-
-    log "✅ Password issues fixed!"
-    log "🔄 REBOOT REQUIRED to apply changes"
-}
-
-# === MAIN INSTALLATION FUNCTION ===
-install_full_setup() {
-    echo ""
-    echo "=============================================="
-    echo "  🚀 STARTING FULL SETUP INSTALLATION"
-    echo "=============================================="
-    echo "🎯 This will install:"
-    echo "   ✅ Google Chrome (with version selection + pin to taskbar + block updates)"
-    echo "   ✅ Nekobox proxy client (with autostart + pin to taskbar)"
-    echo "   ✅ Random fonts & audio theme"
-    echo "   ✅ Password-free system setup"
-    echo ""
-    echo "🆔 Machine ID: $(generate_machine_id)"
-    echo "🖥️ Desktop: $DESKTOP_ENV | 🐧 Version: $UBUNTU_VERSION"
-    echo ""
-
-
-    # Step 1: Remove existing Chrome
-    log "🧹 Step 1/6: Removing existing Chrome installations..."
-    remove_existing_chrome
-
-    # Step 2: Select and install Chrome
-    log "🌐 Step 2/6: Installing Google Chrome..."
-
-    local version_choice
-    version_choice=$(select_chrome_version)
-
-    local selected_file
-    selected_file=$(download_specific_chrome_file "$version_choice")
-
-    if [[ -z "$selected_file" || ! -f "$selected_file" ]]; then
-        log "❌ Failed to download Chrome installation file"
-        exit 1
-    fi
-
-    # Clean up unused files (keep only the selected installation file)
-    find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$selected_file")" -delete 2>/dev/null || true
-
-    install_chrome "$selected_file"
-    create_chrome_shortcut
-    setup_chrome_integration
-    block_chrome_updates
-
-    # Step 3: Install Nekobox
-    log "🔧 Step 3/6: Installing Nekobox..."
-    rm -rf "$DOWNLOAD_DIR" 2>/dev/null || true
-    install_nekobox
-
-    # Step 4: Configure random fonts and audio
-    log "🎨 Step 4/6: Configuring random fonts..."
-    install_random_fonts
-
-    log "🔊 Step 5/6: Configuring random audio..."
-    configure_random_audio
-
-    # Step 5: Fix all password issues
-    log "🔐 Step 6/6: Fixing password issues..."
-    fix_password_issues
-
-    # Step 6: Create verification script
-    create_verification_script
-
-    # Installation completed
-    echo ""
-    echo "=============================================="
-    echo "  ✅ INSTALLATION COMPLETED SUCCESSFULLY!"
-    echo "=============================================="
-    echo ""
-    echo "🎨 Random fonts and audio configured for this machine"
-    echo "🔄 REBOOT REQUIRED to apply all changes:"
-    echo "   sudo reboot"
-    echo ""
-    echo "📋 After reboot you will have:"
-    echo "   ✅ Auto-login to desktop (no password required)"
-    echo "   ✅ Sudo commands work without password"
-    echo "   ✅ Chrome pinned to taskbar & NEVER auto-updates"
-    echo "   ✅ NekoBox auto-starts & pinned to taskbar"
-    echo "   ✅ Unique fonts and audio theme applied"
-    echo ""
-    echo "🛡️ Chrome Update Blocking:"
-    echo "   ✅ 10-layer protection against auto-updates"
-    echo "   ✅ Run ~/check-chrome-updates.sh to verify status"
-    echo ""
-    echo "🔍 System Verification:"
-    echo "   ✅ Run ~/check-system-setup.sh to check all features"
-    echo ""
-    read -p "🔄 Reboot now to complete setup? (y/n): " -r
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        sudo reboot
-    else
-        echo ""
-        echo "⚠️  Remember to reboot manually to apply all changes:"
-        echo "   sudo reboot"
-        echo ""
-    fi
-}
-
-# === MAIN EXECUTION ===
-main() {
-    # Create log file with proper error handling
-    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || LOG_FILE="/tmp/setup_$(date +%Y%m%d_%H%M%S).log"
-    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/setup_$(date +%Y%m%d_%H%M%S).log"
-
-    clear
-    echo "=============================================="
-    echo "  🌐 CHROME & NEKOBOX AUTO INSTALLER"
-    echo "  Ubuntu/Lubuntu 24.04 Edition"
-    echo "=============================================="
-    echo ""
-
-    log "🚀 Starting Chrome & Nekobox Auto Installer for Ubuntu/Lubuntu 24.04..."
-
-    # Check if running as root
-    if [[ $EUID -eq 0 ]]; then
-        echo "❌ This script should not be run as root!"
-        echo "Please run as regular user with sudo privileges."
-        exit 1
-    fi
-
-    # Check Ubuntu version compatibility
-    if [[ "$UBUNTU_VERSION" != "24.04" ]]; then
-        log "⚠️ Warning: This script is optimized for Ubuntu 24.04, detected: $UBUNTU_VERSION"
-        read -p "Continue anyway? (y/n): " -r
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    fi
-
-    # Check internet connection (multiple methods for Ubuntu 24.04)
-    log "🌐 Checking internet connectivity..."
-    if ! ping -c 1 -W 5 google.com &> /dev/null && ! ping -c 1 -W 5 8.8.8.8 &> /dev/null; then
-        echo "❌ No internet connection detected!"
-        echo "Please check your network connection and try again."
-        exit 1
-    fi
-    log "✅ Internet connection verified"
-
-    # Detect desktop environment
-    detect_desktop_environment
-
-    # Prepare system for Ubuntu 24.04
-    prepare_system
-
-    # Run full installation
-    install_full_setup
-}
-
-# Run main function
-main "$@"
