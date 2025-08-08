@@ -1,6 +1,8 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v16
-# - Stronger Google Drive folder listing logic
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v17
+# - Fix: use correct CLI `gdown --list` instead of `gdown list`
+# - Robust listing (URL/ID × with/without --no-cookies, CSV parsing)
+# - Keeps: force gdown>=5.2.0, single-file selection, LXQt pin, cleanup, etc.
 
 set -euo pipefail
 
@@ -27,7 +29,7 @@ ensure_gdown(){
   if [[ -d "$VENV" && -f "$VENV/bin/activate" ]]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
-    if ! (gdown list --help >/dev/null 2>&1); then deactivate || true; rm -rf "$VENV"; fi
+    if ! (gdown --help | grep -q -- "--list"); then deactivate || true; rm -rf "$VENV"; fi
   elif [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
     rm -rf "$VENV"
   fi
@@ -133,27 +135,27 @@ base_setup(){
   log "✅ Hoàn tất bước nền."
 }
 
-# try list with a combination of flags; return 0 + populate CHOSEN_ID/NAME or set RAW_LIST for parsing
+# Proper listing with `gdown --list`
 choose_chrome_file_from_drive(){
   local CHROME_DRIVE_ID="$1"
   local FOLDER_URL="https://drive.google.com/drive/folders/$CHROME_DRIVE_ID"
   local raw=""
   local tried=()
 
-  if (gdown list --help >/dev/null 2>&1); then
+  if (gdown --help | grep -q -- "--list"); then
     log "📋 Lấy danh sách file trong thư mục Drive (không tải xuống)..."
-    # 1) URL + --format csv + --no-cookies
-    raw="$(gdown list "$FOLDER_URL" --format csv --no-cookies 2>/dev/null || true)"; tried+=("url+csv+nocookies")
-    # 2) bare ID + csv + nocookies
-    [[ -z "$raw" ]] && raw="$(gdown list "$CHROME_DRIVE_ID" --format csv --no-cookies 2>/dev/null || true)"; tried+=("id+csv+nocookies")
-    # 3) URL + csv (with cookies)
-    [[ -z "$raw" ]] && raw="$(gdown list "$FOLDER_URL" --format csv 2>/dev/null || true)"; tried+=("url+csv")
-    # 4) bare ID + csv (with cookies)
-    [[ -z "$raw" ]] && raw="$(gdown list "$CHROME_DRIVE_ID" --format csv 2>/dev/null || true)"; tried+=("id+csv")
+    # 1) URL + csv + no-cookies
+    raw="$(gdown --list "$FOLDER_URL" --format csv --no-cookies 2>/dev/null || true)"; tried+=("url+csv+nocookies")
+    # 2) bare ID + csv + no-cookies
+    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" --format csv --no-cookies 2>/dev/null || true)"; tried+=("id+csv+nocookies")
+    # 3) URL + csv
+    [[ -z "$raw" ]] && raw="$(gdown --list "$FOLDER_URL" --format csv 2>/dev/null || true)"; tried+=("url+csv")
+    # 4) bare ID + csv
+    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" --format csv 2>/dev/null || true)"; tried+=("id+csv")
     # 5) URL plain
-    [[ -z "$raw" ]] && raw="$(gdown list "$FOLDER_URL" 2>/dev/null || true)"; tried+=("url+plain")
+    [[ -z "$raw" ]] && raw="$(gdown --list "$FOLDER_URL" 2>/dev/null || true)"; tried+=("url+plain")
     # 6) ID plain
-    [[ -z "$raw" ]] && raw="$(gdown list "$CHROME_DRIVE_ID" 2>/dev/null || true)"; tried+=("id+plain")
+    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" 2>/dev/null || true)"; tried+=("id+plain")
   fi
 
   if [[ -z "$raw" ]]; then
@@ -369,7 +371,7 @@ EOF
 }
 
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v16, strong list) ====="
+  log "===== AIO Setup 24.04 (Auto-run v17, uses gdown --list) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
