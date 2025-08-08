@@ -1,7 +1,10 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v9 (APT pin hard lock)
-# - Based on v8 (Lubuntu-safe, LXQt pin fix, silent cron)
-# - Adds APT pinning to block chrome upgrades via apt even if repo is re-enabled.
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v10
+# - Based on v9 (APT pin, Lubuntu-safe, LXQt pin fix, silent cron)
+# - NEW:
+#   (1) Only purge keyring packages if actually installed (quieter logs)
+#   (2) Auto clean-up at the end: apt autoremove -y (and apt clean)
+#   (3) Hide "GDM3 không tồn tại..." message — silently skip on Lubuntu
 
 set -euo pipefail
 
@@ -10,6 +13,16 @@ need_sudo(){ if ! sudo -v; then echo "Cần quyền sudo."; exit 1; fi }
 is_cmd(){ command -v "$1" &>/dev/null; }
 is_gnome(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && is_cmd gsettings && gsettings list-schemas 2>/dev/null | grep -q '^org.gnome.shell$'; }
 is_lxqt(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt|LXQT|LxQt ]] || pgrep -x lxqt-panel >/dev/null 2>&1; }
+
+# ===== helpers =====
+purge_if_installed(){
+  need_sudo
+  for pkg in "$@"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      sudo apt purge -y "$pkg" || true
+    fi
+  done
+}
 
 # ===== gdown installer =====
 ensure_gdown(){
@@ -105,8 +118,9 @@ lock_chrome_with_apt_pin(){
 Package: google-chrome-stable
 Pin: release *
 Pin-Priority: -1
-# This prevents apt from installing or upgrading Chrome from any repo.
-# To undo: sudo rm /etc/apt/preferences.d/99-hold-google-chrome.pref && sudo apt-mark unhold google-chrome-stable
+# To undo:
+#   sudo rm /etc/apt/preferences.d/99-hold-google-chrome.pref
+#   sudo apt-mark unhold google-chrome-stable
 EOF
 }
 
@@ -203,18 +217,18 @@ autologin-user-timeout=0
 autologin-session=Lubuntu
 EOF
 
+  # Silently skip GDM3 on Lubuntu
   if [[ -d /etc/gdm3 ]]; then
     sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
 [daemon]
 AutomaticLoginEnable=true
 AutomaticLogin=$USER
 EOF
-  else
-    echo "ℹ️ GDM3 không tồn tại (Lubuntu dùng LightDM) — bỏ qua cấu hình GDM."
   fi
 
-  sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
-  sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
+  # Quieter purge
+  purge_if_installed gnome-keyring seahorse kwalletmanager kwallet-kf5
+
   rm -rf ~/.local/share/keyrings ~/.gnupg ~/.config/kwalletrc 2>/dev/null || true
   sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/login 2>/dev/null || true
   sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/passwd 2>/dev/null || true
@@ -290,11 +304,18 @@ EOF
 
 # ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v9, APT pin) ====="
+  log "===== AIO Setup 24.04 (Auto-run v10) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
   install_nekobox
+
+  # --- Auto clean-up ---
+  need_sudo
+  sudo apt autoremove -y || true
+  sudo apt clean || true
+  log "🧹 Đã dọn gói thừa (autoremove + clean)."
+
   log "🎉 Hoàn tất. Khuyến nghị reboot."
 }
 main
