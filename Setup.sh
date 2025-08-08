@@ -16,7 +16,7 @@ MACHINE_ID_FILE="$HOME/.machine_id"
 
 # Google Drive folder IDs
 CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
-NEKOBOX_DRIVE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"
+NEKOBOX_DRIVE_ID="1CCercfKCc9W6xFFNxtyhGaVv0M3jdzd_"
 
 # Ubuntu/Lubuntu 24.04 compatibility
 UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "24.04")
