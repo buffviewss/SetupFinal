@@ -246,8 +246,8 @@ get_chrome_file_list() {
     # Approach 1: Use gdown folder with minimal download
     mkdir -p "$temp_dir" >/dev/null 2>&1 && cd "$temp_dir" >/dev/null 2>&1
 
-    # Try to get file listing with very short timeout first - completely silent
-    if timeout 45 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet >/dev/null 2>&1; then
+    # Try to get file listing with very short timeout first - show output for debugging
+    if timeout 45 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies; then
         # Look for any .deb files that were downloaded or listed
         file_list=$(find "$temp_dir" -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
@@ -262,7 +262,7 @@ get_chrome_file_list() {
     rm -rf "$temp_dir" >/dev/null 2>&1
     mkdir -p "$temp_dir" >/dev/null 2>&1 && cd "$temp_dir" >/dev/null 2>&1
 
-    if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok --quiet >/dev/null 2>&1; then
+    if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok; then
         file_list=$(find "$temp_dir" -type f -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
         if [[ -n "$file_list" ]]; then
@@ -408,7 +408,7 @@ download_specific_chrome_file() {
 
     # Try to download the entire folder with longer timeout for large files
     log "⏳ This may take a few minutes for large files (100MB+)..."
-    if timeout 600 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet; then
+    if timeout 600 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies; then
         # Find the specific file (exact name match)
         local downloaded_file
         downloaded_file=$(find "$DOWNLOAD_DIR" -name "$version" | head -n 1)
