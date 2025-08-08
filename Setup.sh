@@ -284,22 +284,46 @@ select_chrome_version() {
     echo "  🌐 CHROME VERSION SELECTION"
     echo "=============================================="
 
+    echo ""
+    echo "Chọn chế độ cài đặt Chrome:"
+    echo ""
+    local mode_options=(
+        "Tải bản mới nhất từ Google (Khuyến nghị)"
+        "Chọn phiên bản từ Google Drive"
+    )
+
+    select mode in "${mode_options[@]}"; do
+        case $mode in
+            "Tải bản mới nhất từ Google (Khuyến nghị)")
+                log "🌐 User selected: Download Latest Chrome from official source"
+                echo "latest"
+                return 0
+                ;;
+            "Chọn phiên bản từ Google Drive")
+                log "📁 User selected: Choose version from Google Drive"
+                # Chuẩn bị môi trường Python/gdown chỉ khi cần dùng Google Drive
+                setup_python_env
+                break
+                ;;
+            *)
+                echo "❌ Lựa chọn không hợp lệ, vui lòng chọn 1 hoặc 2."
+                ;;
+        esac
+    done
+
+    # Chỉ khi chọn Google Drive mới tiến hành lấy danh sách phiên bản
     log "🔍 Checking Google Drive for Chrome versions..."
 
     local file_list
     file_list=$(get_chrome_file_list)
 
-    # Check if we got actual files from Drive
     if [[ -n "$file_list" ]]; then
         log "✅ Successfully found Chrome files in Google Drive"
         echo ""
         echo "📁 Available Chrome versions in your Google Drive folder:"
         echo ""
 
-        # Add download latest option
-        local options=("Download Latest Chrome (Recommended)")
-
-        # Add ALL actual files from drive
+        local options=()
         local file_count=0
         while IFS= read -r file; do
             if [[ -n "$file" ]]; then
@@ -316,28 +340,16 @@ select_chrome_version() {
         echo ""
 
         select version in "${options[@]}"; do
-            case $version in
-                "Download Latest Chrome (Recommended)")
-                    log "🌐 User selected: Download Latest Chrome"
-                    echo "latest"
-                    return 0
-                    ;;
-                *)
-                    if [[ -n "$version" ]]; then
-                        log "📦 User selected: $version"
-                        echo "$version"
-                        return 0
-                    else
-                        echo "❌ Invalid option! Using latest version..."
-                        log "⚠️ Invalid selection, defaulting to latest"
-                        echo "latest"
-                        return 0
-                    fi
-                    ;;
-            esac
+            if [[ -n "$version" ]]; then
+                log "📦 User selected: $version"
+                echo "$version"
+                return 0
+            else
+                echo "❌ Lựa chọn không hợp lệ, vui lòng chọn số trong danh sách."
+            fi
         done
     else
-        # No files found in Drive, offer only latest
+        # Không lấy được danh sách từ Drive
         log "⚠️ Could not retrieve file list from Drive folder"
         log "💡 This might be due to network issues or Drive permissions"
         echo ""
@@ -1127,9 +1139,6 @@ install_full_setup() {
 
     # Step 2: Select and install Chrome
     log "🌐 Step 2/6: Installing Google Chrome..."
-
-    # Ensure Python/pip/gdown are ready BEFORE listing Drive
-    setup_python_env
 
     local version_choice
     version_choice=$(select_chrome_version)
