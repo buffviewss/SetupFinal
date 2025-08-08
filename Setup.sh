@@ -397,7 +397,10 @@ download_specific_chrome_file() {
     local version="$1"
 
     if [[ $version == "latest" ]]; then
-        if download_latest_chrome; then
+        local latest_file
+        latest_file=$(download_latest_chrome)
+        if [[ $? -eq 0 && -n "$latest_file" ]]; then
+            echo "$latest_file"
             return 0
         else
             log "❌ Failed to download latest Chrome"
@@ -429,7 +432,10 @@ download_specific_chrome_file() {
 
     # Fallback to latest version
     log "🔄 Falling back to latest Chrome version..."
-    if download_latest_chrome; then
+    local fallback_file
+    fallback_file=$(download_latest_chrome)
+    if [[ $? -eq 0 && -n "$fallback_file" ]]; then
+        echo "$fallback_file"
         return 0
     else
         log "❌ All download methods failed"
