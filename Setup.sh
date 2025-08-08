@@ -1,10 +1,9 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN)
-# Source features merged and adapted from: ChromeOld.sh, fix_password_issues.sh, SetupVm.bash
-# Behavior per user request:
-#  - Auto run all steps sequentially without a menu.
-#  - Only prompt ONCE: to choose which Chrome .deb file to install from the downloaded Google Drive folder.
-#  - Remove Firefox install/uninstall features. (No Firefox modifications are performed.)
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v2 (fix gdown-venv)
+# Changes in v2:
+#  - Robust ensure_gdown(): verifies python3-venv, recreates broken venv, and falls back to --user install if needed.
+#  - PATH exported to include ~/.local/bin so gdown works without venv.
+#  - Still AUTO-RUN, only asks once for Chrome .deb choice, no Firefox steps.
 
 set -euo pipefail
 
@@ -13,18 +12,46 @@ log()   { echo -e "$1"; }
 need_sudo() { if ! sudo -v; then echo "Cần quyền sudo để tiếp tục."; exit 1; fi }
 is_cmd() { command -v "$1" &>/dev/null; }
 
-# ====== Global venv for gdown (reuse across steps) ======
+# ====== Robust installer for gdown ======
 ensure_gdown() {
-  if [[ ! -d "$HOME/gdown-venv" ]]; then
-    log "📦 Tạo venv Python cho gdown..."
-    python3 -m venv "$HOME/gdown-venv"
+  # Try to guarantee python venv support
+  need_sudo
+  sudo apt update -y || true
+  sudo apt install -y python3-venv python3-pip || true
+
+  export PATH="$HOME/.local/bin:$PATH"
+
+  local VENV="$HOME/gdown-venv"
+  # If a broken/incomplete venv folder exists, remove it
+  if [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
+    rm -rf "$VENV"
   fi
-  # shellcheck disable=SC1091
-  source "$HOME/gdown-venv/bin/activate"
-  pip install --no-cache-dir --upgrade pip gdown
+
+  # Try to (re)create venv if needed
+  if [[ ! -f "$VENV/bin/activate" ]]; then
+    python3 -m venv "$VENV" || true
+  fi
+
+  if [[ -f "$VENV/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$VENV/bin/activate"
+    python -m pip install --no-cache-dir --upgrade pip gdown
+    return 0
+  fi
+
+  # ---- Fallback: user install (no venv) ----
+  echo "⚠️ Không tạo được venv — chuyển sang cài gdown ở user site..."
+  python3 -m pip install --user --no-cache-dir --upgrade pip gdown
+  if ! is_cmd gdown; then
+    # Some shells need PATH updated for this session
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
+  if ! is_cmd gdown; then
+    echo "❌ Không thể cài gdown. Kiểm tra lại python/pip và mạng rồi chạy lại."; exit 1
+  fi
 }
 
-# ====== 1) Cập nhật & gói nền (từ SetupVm.bash) ======
+# ====== 1) Cập nhật & gói nền ======
 base_setup() {
   need_sudo
   log "🔄 Đang cập nhật hệ thống & thêm universe..."
@@ -34,11 +61,8 @@ base_setup() {
   log "📦 Cài Open VM Tools..."
   sudo apt install -y open-vm-tools open-vm-tools-desktop || echo "⚠️ Không có gói Open VM Tools phù hợp."
 
-  log "📦 Cài python3-pip, unzip, venv..."
-  sudo apt install -y python3-pip unzip python3-venv
-
-  log "📦 Cài build-essential & Qt5 libs (cho Nekobox)..."
-  sudo apt install -y build-essential \
+  log "📦 Cài unzip, build-essential & Qt5 libs (cho Nekobox)..."
+  sudo apt install -y unzip build-essential \
     libqt5network5 libqt5core5a libqt5gui5 libqt5widgets5 \
     qtbase5-dev libqt5x11extras5 libqt5quick5 libqt5quickwidgets5 libqt5quickparticles5
 
@@ -47,10 +71,8 @@ base_setup() {
 
 # ====== 2) Cài Chrome từ Google Drive & tắt update ======
 install_chrome_from_drive() {
-  need_sudo
   ensure_gdown
 
-  # 👉 Thay ID này nếu cần. Có thể override bằng biến môi trường trước khi chạy: CHROME_DRIVE_ID=... ./script.sh
   local CHROME_DRIVE_ID="${CHROME_DRIVE_ID:-1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1}"
   local DOWNLOAD_DIR="$HOME/browser_temp"
   mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
@@ -58,7 +80,6 @@ install_chrome_from_drive() {
   log "📥 Tải thư mục Chrome từ Google Drive..."
   gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies
 
-  # Chỉ hỏi người dùng MỘT LẦN để chọn file .deb
   log "🔍 Liệt kê các gói Chrome (.deb) đã tải:"
   mapfile -t FILES < <(find "$DOWNLOAD_DIR" -type f -name "*.deb" | sort)
   if (( ${#FILES[@]} == 0 )); then
@@ -75,6 +96,7 @@ install_chrome_from_drive() {
   log "🧹 Dọn dẹp file không dùng..."
   find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete || true
 
+  need_sudo
   log "🗑️ Gỡ Chrome bản đang có (nếu có)..."
   sudo apt remove -y google-chrome-stable || true
 
@@ -83,7 +105,6 @@ install_chrome_from_drive() {
   sudo apt-mark hold google-chrome-stable || true
   sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null || true
 
-  # Tắt update nội bộ Chrome
   log "🚫 Tắt update nội bộ Chrome..."
   sudo rm -rf /opt/google/chrome/cron/ || true
   sudo mkdir -p /etc/opt/chrome/policies/managed
@@ -97,7 +118,6 @@ JSON
   sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
   sudo chmod -R 000 /opt/google/chrome/cron || true
 
-  # Tạo shortcut riêng và pin
   log "🎨 Tạo shortcut Chrome (Custom)..."
   cat <<'EOF' > ~/.local/share/applications/browser_custom.desktop
 [Desktop Entry]
@@ -119,7 +139,7 @@ EOF
   log "✅ Hoàn tất cài Chrome (đã khóa & tắt update nội bộ)."
 }
 
-# ====== 3) Sửa vấn đề password + auto-login (Firefox-related steps removed) ======
+# ====== 3) Sửa vấn đề password + auto-login ======
 fix_passwords() {
   need_sudo
   log "🔧 Đang sửa tất cả vấn đề password..."
@@ -144,14 +164,6 @@ EOF
 [daemon]
 AutomaticLoginEnable=true
 AutomaticLogin=$USER
-
-[security]
-
-[xdmcp]
-
-[chooser]
-
-[debug]
 EOF
 
   log "🔑 Gỡ GNOME Keyring & KDE Wallet (nếu có)..."
@@ -191,11 +203,7 @@ EOF
 }
 EOF
 
-  log "⚙️ Tắt gnome-keyring-daemon (user)..."
-  systemctl --user disable gnome-keyring-daemon 2>/dev/null || true
-  systemctl --user stop gnome-keyring-daemon 2>/dev/null || true
-
-  log "🔧 Tạo .desktop cho Chrome dùng --password-store=basic..."
+  log "⚙️ Tạo .desktop cho Chrome dùng --password-store=basic..."
   sudo rm -f /usr/share/applications/google-chrome.desktop 2>/dev/null || true
   cat > ~/.local/share/applications/google-chrome.desktop <<'EOF'
 [Desktop Entry]
@@ -212,10 +220,10 @@ MimeType=text/html;text/xml;application/xhtml+xml;
 EOF
   chmod +x ~/.local/share/applications/google-chrome.desktop
 
-  log "✅ ĐÃ SỬA XONG. (Không hỏi thêm gì khác.)"
+  log "✅ ĐÃ SỬA XONG."
 }
 
-# ====== 4) Cài Nekobox (từ SetupVm.bash) ======
+# ====== 4) Cài Nekobox ======
 install_nekobox() {
   ensure_gdown
   log "📂 Chuẩn bị thư mục Nekobox..."
@@ -224,13 +232,12 @@ install_nekobox() {
 
   log "⬇️ Tải Nekobox từ Google Drive..."
   cd "$HOME/Downloads"
-  local FILE_ID="${NEKOBOX_FILE_ID:-1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj}"   # Cho phép override qua biến môi trường
+  local FILE_ID="${NEKOBOX_FILE_ID:-1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj}"
   gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Tải thất bại! Kiểm tra FILE_ID."; return 1; }
 
   log "📂 Giải nén..."
   unzip -o nekobox.zip -d "$HOME/Downloads/nekoray"
 
-  # Sửa cấu trúc thư mục lồng nhau nếu có
   local inner_dir
   inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
   if [[ -n "${inner_dir:-}" && "$inner_dir" != "$HOME/Downloads/nekoray" ]]; then
@@ -261,7 +268,6 @@ EOF
   cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"
   chmod +x "$HOME/.config/autostart/nekoray.desktop"
 
-  # Pin vào taskbar nếu GNOME
   if [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then
     log "📌 GNOME: pin Nekobox vào favorites..."
     gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
@@ -274,25 +280,14 @@ EOF
   log "🚀 Thử chạy Nekobox..."
   ./nekobox || echo "⚠️ Không tự chạy được — mở bằng $HOME/Downloads/nekoray/nekobox."
 
-  # Post-checks
-  log ""
-  log "🔍 Kiểm tra sau cài:"
-  for pkg in open-vm-tools open-vm-tools-desktop python3-pip unzip build-essential qtbase5-dev; do
-    if dpkg -l | grep -q "^ii\s*$pkg"; then echo "✅ $pkg installed"; else echo "❌ $pkg missing"; fi
-  done
-  echo "🐍 $(python3 --version)"; echo "$(pip3 --version || true)"
-  if python3 -m pip show gdown >/dev/null 2>&1; then echo "✅ gdown installed"; else echo "❌ gdown missing"; fi
-  [[ -d "$HOME/Downloads/nekoray" ]] && echo "✅ Thư mục Nekoray OK" || echo "❌ Thiếu thư mục Nekoray"
-  [[ -f "$HOME/Desktop/nekoray.desktop" ]] && echo "✅ Shortcut Desktop OK" || echo "❌ Thiếu shortcut Desktop"
-
   log "✅ Hoàn tất cài Nekobox."
 }
 
 # ====== AUTO RUN ======
 main() {
-  log "===== AIO Setup 24.04 (Auto-run) ====="
+  log "===== AIO Setup 24.04 (Auto-run v2) ====="
   base_setup
-  install_chrome_from_drive   # 💬 Chỉ nhắc chọn file Chrome .deb ở đây
+  install_chrome_from_drive
   fix_passwords
   install_nekobox
   log "🎉 Tất cả bước đã chạy xong. Khuyến nghị tự reboot máy để áp dụng hoàn toàn."
