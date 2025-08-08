@@ -1,7 +1,8 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v6 (no-proxy variant)
-# - Keeps v5 improvements: GNOME checks, chrome cron guard, apt held fix, LXQt auto-pin.
-# - Removes all proxy handling and any PROXY_URL mention.
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v7
+# Fixes:
+#  - Lubuntu: skip GDM3 file if directory doesn't exist
+#  - LXQt pin: fix awk syntax (no reserved 'in'), safer section handling
 
 set -euo pipefail
 
@@ -11,7 +12,7 @@ is_cmd(){ command -v "$1" &>/dev/null; }
 is_gnome(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && is_cmd gsettings && gsettings list-schemas 2>/dev/null | grep -q '^org.gnome.shell$'; }
 is_lxqt(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt|LXQT|LxQt ]] || pgrep -x lxqt-panel >/dev/null 2>&1; }
 
-# ===== gdown installer (no proxy) =====
+# ===== gdown installer =====
 ensure_gdown(){
   need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip || true
   export PATH="$HOME/.local/bin:$PATH"
@@ -31,7 +32,7 @@ ensure_gdown(){
   is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
 }
 
-# ===== LXQt Quicklaunch auto-pin =====
+# ===== LXQt Quicklaunch auto-pin (safer) =====
 pin_lxqt_quicklaunch(){
   local desktop="$1"   # Full path to .desktop file
   local conf="$HOME/.config/lxqt/panel.conf"
@@ -44,59 +45,50 @@ pin_lxqt_quicklaunch(){
     _LXQT_BACKUP_DONE=1
   fi
 
-  # Ensure quicklaunch plugin listed
-  if grep -q '^plugins=' "$conf"; then
-    if ! grep -E '^plugins=.*\bquicklaunch\b' "$conf" >/dev/null; then
-      sed -i 's/^plugins=\(.*\)$/plugins=quicklaunch,\1/' "$conf"
-    fi
-  else
-    echo -e "\nplugins=quicklaunch" >> "$conf"
-  fi
-
-  # Ensure section exists
+  # Ensure [quicklaunch] section exists
   if ! grep -q '^\[quicklaunch\]' "$conf"; then
-    echo -e "\n[quicklaunch]\napps\\size=0" >> "$conf"
+    printf "\n[quicklaunch]\napps\\size=0\n" >> "$conf"
   fi
 
-  # Update [quicklaunch] section: add the entry if missing, update size accordingly
+  # Insert desktop entry into [quicklaunch] if not already present; recompute size
   awk -v d="$desktop" '
-    BEGIN{in=0; dup=0; buf=""}
-    function print_section(){
-      if (buf != "") printf "%s", buf;
-      split(buf, arr, "\n"); cnt=0;
-      for(i in arr) if (arr[i] ~ /^apps\\[0-9]+\\desktop=/) cnt++;
-      if (dup == 0) { print "apps\\" cnt "\\desktop=" d; cnt++; }
-      print "apps\\size=" cnt;
+    BEGIN{insec=0; dup=0; cnt=-1}
+    function flush_section(){
+      if (insec) {
+        if (dup==0) {
+          if (cnt<0) cnt=0;
+          print "apps\\" cnt "\\desktop=" d;
+          cnt++;
+        }
+        print "apps\\size=" cnt;
+        insec=0;
+      }
     }
-    /^\[quicklaunch\]$/ { print; in=1; next }
+    /^\[quicklaunch\]$/ { print; insec=1; cnt=-1; next }
     /^\[/ {
-      if (in==1) { print_section(); in=0; }
+      if (insec) { flush_section() }
       print; next
     }
     {
-      if (in==1) {
+      if (insec) {
         if ($0 ~ /^apps\\[0-9]+\\desktop=/) {
           if (index($0, d) > 0) dup=1;
-          buf = buf $0 ORS; next
+          print; next
         }
-        if ($0 ~ /^apps\\size=/) { next }
-        buf = buf $0 ORS; next
+        if ($0 ~ /^apps\\size=/) {
+          # capture size then skip (will rewrite)
+          split($0,a,"="); cnt = a[2]+0; next
+        }
       }
       print
     }
-    END{
-      if (in==1) { print_section(); }
-    }
+    END{ if (insec) { flush_section() } }
   ' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
 
-  # Restart panel to apply
+  # Restart LXQt panel to apply (best-effort)
   if is_cmd lxqt-panel; then
-    if lxqt-panel --help >/dev/null 2>&1 && lxqt-panel --help | grep -q -- '--restart'; then
-      lxqt-panel --restart >/dev/null 2>&1 || true
-    else
-      pkill -x lxqt-panel >/dev/null 2>&1 || true
-      (nohup lxqt-panel >/dev/null 2>&1 &)
-    fi
+    pkill -x lxqt-panel >/dev/null 2>&1 || true
+    (nohup lxqt-panel >/dev/null 2>&1 &)
   fi
 }
 
@@ -189,11 +181,17 @@ autologin-user=$USER
 autologin-user-timeout=0
 autologin-session=Lubuntu
 EOF
-  sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
+
+  # Only if gdm3 exists (Ubuntu GNOME), otherwise skip on Lubuntu
+  if [[ -d /etc/gdm3 ]]; then
+    sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
 [daemon]
 AutomaticLoginEnable=true
 AutomaticLogin=$USER
 EOF
+  else
+    echo "ℹ️ GDM3 không tồn tại (Lubuntu dùng LightDM) — bỏ qua cấu hình GDM."
+  fi
 
   sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
   sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
@@ -272,7 +270,7 @@ EOF
 
 # ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v6, LXQt auto-pin, no proxy) ====="
+  log "===== AIO Setup 24.04 (Auto-run v7, Lubuntu fixes) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
