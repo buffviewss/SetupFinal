@@ -236,13 +236,9 @@ EOF
 
 # === CHROME VERSION SELECTION ===
 get_chrome_file_list() {
-    log "🔍 Getting Chrome file list from Google Drive..."
-
-    # Method 1: Use gdown with --dry-run to get file list without downloading
+    # Silent operation - no logging during file list retrieval
     local file_list=""
     local temp_dir="/tmp/chrome_list_$$"
-
-    log "📋 Attempting to list files from Drive folder..."
 
     # Try multiple approaches to get the actual file list
 
@@ -255,7 +251,6 @@ get_chrome_file_list() {
         file_list=$(find "$temp_dir" -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
         if [[ -n "$file_list" ]]; then
-            log "✅ Successfully retrieved actual file list from Drive"
             rm -rf "$temp_dir"
             echo "$file_list"
             return 0
@@ -266,12 +261,10 @@ get_chrome_file_list() {
     rm -rf "$temp_dir" 2>/dev/null || true
     mkdir -p "$temp_dir" && cd "$temp_dir"
 
-    log "🔄 Trying alternative method to get file list..."
     if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok --quiet 2>/dev/null; then
         file_list=$(find "$temp_dir" -type f -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
         if [[ -n "$file_list" ]]; then
-            log "✅ Retrieved file list using alternative method"
             rm -rf "$temp_dir"
             echo "$file_list"
             return 0
@@ -281,9 +274,7 @@ get_chrome_file_list() {
     # Clean up
     rm -rf "$temp_dir" 2>/dev/null || true
 
-    # Method 2: If all else fails, return empty to trigger latest download
-    log "⚠️ Could not retrieve file list from Drive folder"
-    log "💡 This might be due to network issues or Drive permissions"
+    # Return empty if failed
     echo ""
 }
 
@@ -292,11 +283,15 @@ select_chrome_version() {
     echo "  🌐 CHROME VERSION SELECTION"
     echo "=============================================="
 
+    log "🔍 Checking Google Drive for Chrome versions..."
+
     local file_list
     file_list=$(get_chrome_file_list)
 
     # Check if we got actual files from Drive
     if [[ -n "$file_list" ]]; then
+        log "✅ Successfully found Chrome files in Google Drive"
+        echo ""
         echo "📁 Available Chrome versions in your Google Drive folder:"
         echo ""
 
@@ -342,6 +337,9 @@ select_chrome_version() {
         done
     else
         # No files found in Drive, offer only latest
+        log "⚠️ Could not retrieve file list from Drive folder"
+        log "💡 This might be due to network issues or Drive permissions"
+        echo ""
         echo "⚠️ Could not access files in Google Drive folder"
         echo "📡 This might be due to:"
         echo "   • Network connectivity issues"
