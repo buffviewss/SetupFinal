@@ -37,7 +37,8 @@ AUDIO_THEMES=(
 # === LOGGING ===
 log() {
     local message="$(date '+%Y-%m-%d %H:%M:%S') - $1"
-    echo "$message"
+    # Send logs to stderr to avoid polluting stdout of functions that 'echo' return values
+    echo "$message" >&2
     echo "$message" >> "$LOG_FILE" 2>/dev/null || true
 }
 
@@ -367,7 +368,7 @@ download_latest_chrome() {
     log "📥 Downloading latest Chrome from official source..."
 
     # Download with proper error checking
-    if wget -O chrome-latest.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"; then
+    if wget -q -O chrome-latest.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"; then
         # Verify the file was downloaded and has reasonable size (>50MB)
         if [[ -f "chrome-latest.deb" ]]; then
             local file_size
