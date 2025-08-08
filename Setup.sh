@@ -1,10 +1,8 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v10
-# - Based on v9 (APT pin, Lubuntu-safe, LXQt pin fix, silent cron)
-# - NEW:
-#   (1) Only purge keyring packages if actually installed (quieter logs)
-#   (2) Auto clean-up at the end: apt autoremove -y (and apt clean)
-#   (3) Hide "GDM3 không tồn tại..." message — silently skip on Lubuntu
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v12
+# - Based on v11 (APT pin, LXQt pin, quiet logs, autoremove)
+# - NEW: Force choose ONE Chrome .deb before download (no folder fallback).
+#        If `gdown list` unsupported, you MUST paste a FILE_ID.
 
 set -euo pipefail
 
@@ -118,9 +116,6 @@ lock_chrome_with_apt_pin(){
 Package: google-chrome-stable
 Pin: release *
 Pin-Priority: -1
-# To undo:
-#   sudo rm /etc/apt/preferences.d/99-hold-google-chrome.pref
-#   sudo apt-mark unhold google-chrome-stable
 EOF
 }
 
@@ -137,22 +132,68 @@ base_setup(){
   log "✅ Hoàn tất bước nền."
 }
 
+# --- FORCE choose .deb name/ID first (no folder download) ---
+choose_chrome_file_from_drive(){
+  local CHROME_DRIVE_ID="$1"
+  local FOLDER_URL="https://drive.google.com/drive/folders/$CHROME_DRIVE_ID"
+  local raw=""
+
+  if gdown --help 2>&1 | grep -q -E ' list( |$)'; then
+    log "📋 Lấy danh sách file trong thư mục Drive (không tải xuống)..."
+    raw="$(gdown list "$FOLDER_URL" --no-cookies 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$raw" ]]; then
+    echo "⚠️ gdown trên máy chưa hỗ trợ 'list'."
+    echo "👉 Dán FILE_ID của gói .deb bạn muốn cài (bắt buộc, sẽ không tải cả thư mục):"
+    read -rp "FILE_ID: " MANUAL_ID
+    if [[ -z "${MANUAL_ID:-}" ]]; then
+      echo "❌ Không có FILE_ID và không thể liệt kê thư mục. Thoát."
+      exit 1
+    fi
+    CHOSEN_ID="$MANUAL_ID"
+    CHOSEN_NAME="chrome_selected.deb"
+    return 0
+  fi
+
+  # Parse .deb lines → build arrays of IDs and names
+  mapfile -t rows < <(echo "$raw" | awk '/\.deb([[:space:]]|$)/ {print}')
+  if (( ${#rows[@]} == 0 )); then
+    echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
+  fi
+
+  echo "Các bản Chrome có sẵn:"
+  declare -a IDS NAMES
+  local idx=1
+  for line in "${rows[@]}"; do
+    local id name
+    id="$(echo "$line" | awk '{print $1}')"
+    name="$(echo "$line" | sed -E 's/^[^ ]+ //; s/ [0-9.]+([KMG]i?B)?$//')"
+    IDS[$idx]="$id"; NAMES[$idx]="$name"
+    printf "  %2d) %s\n" "$idx" "$name"
+    idx=$((idx+1))
+  done
+  read -rp "👉 Chọn số thứ tự gói cần tải & cài: " choice
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice<1 || choice>=idx )); then
+    echo "❌ Lựa chọn không hợp lệ."; exit 1
+  fi
+  CHOSEN_ID="${IDS[$choice]}"
+  CHOSEN_NAME="${NAMES[$choice]}"
+  return 0
+}
+
 # ===== 2) Chrome =====
 install_chrome_from_drive(){
   ensure_gdown
   local CHROME_DRIVE_ID="${CHROME_DRIVE_ID:-1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1}"
   local DOWNLOAD_DIR="$HOME/browser_temp"
   mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-  log "📥 Tải thư mục Chrome từ Google Drive..."
-  gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies
-  mapfile -t FILES < <(find "$DOWNLOAD_DIR" -type f -name "*.deb" | sort)
-  (( ${#FILES[@]} )) || { echo "❌ Không tìm thấy file .deb."; exit 1; }
-  nl -w2 -s". " <(printf "%s\n" "${FILES[@]}")
-  read -rp "👉 Nhập số thứ tự file Chrome muốn cài: " choice
-  [[ "$choice" =~ ^[0-9]+$ ]] && (( choice>=1 && choice<=${#FILES[@]} )) || { echo "❌ Lựa chọn không hợp lệ!"; exit 1; }
-  local FILE_SELECT="${FILES[$((choice-1))]}"
-  echo "✅ Chọn file: $FILE_SELECT"
-  find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete || true
+
+  choose_chrome_file_from_drive "$CHROME_DRIVE_ID"
+  log "📥 Tải duy nhất file đã chọn: $CHOSEN_NAME"
+  gdown --id "$CHOSEN_ID" -O "$CHOSEN_NAME"
+  local FILE_SELECT="$DOWNLOAD_DIR/$CHOSEN_NAME"
+  [[ -f "$FILE_SELECT" ]] || { echo "❌ Tải file thất bại."; exit 1; }
 
   need_sudo
   sudo apt remove -y google-chrome-stable || true
@@ -217,7 +258,6 @@ autologin-user-timeout=0
 autologin-session=Lubuntu
 EOF
 
-  # Silently skip GDM3 on Lubuntu
   if [[ -d /etc/gdm3 ]]; then
     sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
 [daemon]
@@ -226,7 +266,6 @@ AutomaticLogin=$USER
 EOF
   fi
 
-  # Quieter purge
   purge_if_installed gnome-keyring seahorse kwalletmanager kwallet-kf5
 
   rm -rf ~/.local/share/keyrings ~/.gnupg ~/.config/kwalletrc 2>/dev/null || true
@@ -304,18 +343,16 @@ EOF
 
 # ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v10) ====="
+  log "===== AIO Setup 24.04 (Auto-run v12, force single-file Chrome) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
   install_nekobox
 
-  # --- Auto clean-up ---
   need_sudo
   sudo apt autoremove -y || true
   sudo apt clean || true
   log "🧹 Đã dọn gói thừa (autoremove + clean)."
-
   log "🎉 Hoàn tất. Khuyến nghị reboot."
 }
 main
