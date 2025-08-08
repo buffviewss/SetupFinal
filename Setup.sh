@@ -368,14 +368,22 @@ download_latest_chrome() {
 
     # Download with proper error checking
     if wget -O chrome-latest.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"; then
-        # Verify the file was downloaded and has reasonable size
-        if [[ -f "chrome-latest.deb" ]] && [[ $(stat -f%z "chrome-latest.deb" 2>/dev/null || stat -c%s "chrome-latest.deb" 2>/dev/null) -gt 50000000 ]]; then
-            log "✅ Successfully downloaded Chrome ($(du -h chrome-latest.deb | cut -f1))"
-            echo "$DOWNLOAD_DIR/chrome-latest.deb"
-            return 0
+        # Verify the file was downloaded and has reasonable size (>50MB)
+        if [[ -f "chrome-latest.deb" ]]; then
+            local file_size
+            file_size=$(wc -c < "chrome-latest.deb" 2>/dev/null || echo "0")
+
+            if [[ "$file_size" -gt 50000000 ]]; then
+                log "✅ Successfully downloaded Chrome ($(du -h chrome-latest.deb | cut -f1))"
+                echo "$DOWNLOAD_DIR/chrome-latest.deb"
+                return 0
+            else
+                log "❌ Downloaded file is too small ($file_size bytes)"
+                rm -f chrome-latest.deb 2>/dev/null
+                return 1
+            fi
         else
-            log "❌ Downloaded file is invalid or too small"
-            rm -f chrome-latest.deb 2>/dev/null
+            log "❌ Downloaded file not found"
             return 1
         fi
     else
