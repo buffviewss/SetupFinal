@@ -402,7 +402,14 @@ download_latest_chrome() {
 download_specific_chrome_file() {
     local version="$1"
 
-    if [[ $version == "latest" ]]; then
+    # Normalize version string to avoid stray whitespace/CRLF
+    version=$(printf "%s" "$version" | tr -d '\r' | xargs)
+    log "🔎 Version choice normalized: '$version'"
+
+    # Case-insensitive, prefix-tolerant check for 'latest'
+    local version_lc
+    version_lc=$(printf "%s" "$version" | tr 'A-Z' 'a-z')
+    if [[ "$version_lc" == latest* ]]; then
         local latest_file
         latest_file=$(download_latest_chrome)
         if [[ $? -eq 0 && -n "$latest_file" ]]; then
