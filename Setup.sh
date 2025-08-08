@@ -1,112 +1,149 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v2 (fix gdown-venv)
-# Changes in v2:
-#  - Robust ensure_gdown(): verifies python3-venv, recreates broken venv, and falls back to --user install if needed.
-#  - PATH exported to include ~/.local/bin so gdown works without venv.
-#  - Still AUTO-RUN, only asks once for Chrome .deb choice, no Firefox steps.
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v6 (no-proxy variant)
+# - Keeps v5 improvements: GNOME checks, chrome cron guard, apt held fix, LXQt auto-pin.
+# - Removes all proxy handling and any PROXY_URL mention.
 
 set -euo pipefail
 
-# ====== Helpers ======
-log()   { echo -e "$1"; }
-need_sudo() { if ! sudo -v; then echo "Cần quyền sudo để tiếp tục."; exit 1; fi }
-is_cmd() { command -v "$1" &>/dev/null; }
+log(){ echo -e "$1"; }
+need_sudo(){ if ! sudo -v; then echo "Cần quyền sudo."; exit 1; fi }
+is_cmd(){ command -v "$1" &>/dev/null; }
+is_gnome(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && is_cmd gsettings && gsettings list-schemas 2>/dev/null | grep -q '^org.gnome.shell$'; }
+is_lxqt(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt|LXQT|LxQt ]] || pgrep -x lxqt-panel >/dev/null 2>&1; }
 
-# ====== Robust installer for gdown ======
-ensure_gdown() {
-  # Try to guarantee python venv support
-  need_sudo
-  sudo apt update -y || true
-  sudo apt install -y python3-venv python3-pip || true
-
+# ===== gdown installer (no proxy) =====
+ensure_gdown(){
+  need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip || true
   export PATH="$HOME/.local/bin:$PATH"
-
   local VENV="$HOME/gdown-venv"
-  # If a broken/incomplete venv folder exists, remove it
-  if [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
-    rm -rf "$VENV"
-  fi
-
-  # Try to (re)create venv if needed
-  if [[ ! -f "$VENV/bin/activate" ]]; then
-    python3 -m venv "$VENV" || true
-  fi
-
+  [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]] && rm -rf "$VENV"
+  [[ ! -f "$VENV/bin/activate" ]] && python3 -m venv "$VENV" || true
   if [[ -f "$VENV/bin/activate" ]]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
-    python -m pip install --no-cache-dir --upgrade pip gdown
+    python -m pip install --no-cache-dir --upgrade pip
+    python -m pip install --no-cache-dir --upgrade gdown
     return 0
   fi
+  python3 -m pip install --user --no-cache-dir --upgrade pip || true
+  python3 -m pip install --user --no-cache-dir --upgrade gdown
+  export PATH="$HOME/.local/bin:$PATH"
+  is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
+}
 
-  # ---- Fallback: user install (no venv) ----
-  echo "⚠️ Không tạo được venv — chuyển sang cài gdown ở user site..."
-  python3 -m pip install --user --no-cache-dir --upgrade pip gdown
-  if ! is_cmd gdown; then
-    # Some shells need PATH updated for this session
-    export PATH="$HOME/.local/bin:$PATH"
+# ===== LXQt Quicklaunch auto-pin =====
+pin_lxqt_quicklaunch(){
+  local desktop="$1"   # Full path to .desktop file
+  local conf="$HOME/.config/lxqt/panel.conf"
+  mkdir -p "$HOME/.config/lxqt"
+  touch "$conf"
+
+  # Backup once per run
+  if [[ -z "${_LXQT_BACKUP_DONE:-}" ]]; then
+    cp -f "$conf" "$conf.bak.$(date +%s)" 2>/dev/null || true
+    _LXQT_BACKUP_DONE=1
   fi
-  if ! is_cmd gdown; then
-    echo "❌ Không thể cài gdown. Kiểm tra lại python/pip và mạng rồi chạy lại."; exit 1
+
+  # Ensure quicklaunch plugin listed
+  if grep -q '^plugins=' "$conf"; then
+    if ! grep -E '^plugins=.*\bquicklaunch\b' "$conf" >/dev/null; then
+      sed -i 's/^plugins=\(.*\)$/plugins=quicklaunch,\1/' "$conf"
+    fi
+  else
+    echo -e "\nplugins=quicklaunch" >> "$conf"
+  fi
+
+  # Ensure section exists
+  if ! grep -q '^\[quicklaunch\]' "$conf"; then
+    echo -e "\n[quicklaunch]\napps\\size=0" >> "$conf"
+  fi
+
+  # Update [quicklaunch] section: add the entry if missing, update size accordingly
+  awk -v d="$desktop" '
+    BEGIN{in=0; dup=0; buf=""}
+    function print_section(){
+      if (buf != "") printf "%s", buf;
+      split(buf, arr, "\n"); cnt=0;
+      for(i in arr) if (arr[i] ~ /^apps\\[0-9]+\\desktop=/) cnt++;
+      if (dup == 0) { print "apps\\" cnt "\\desktop=" d; cnt++; }
+      print "apps\\size=" cnt;
+    }
+    /^\[quicklaunch\]$/ { print; in=1; next }
+    /^\[/ {
+      if (in==1) { print_section(); in=0; }
+      print; next
+    }
+    {
+      if (in==1) {
+        if ($0 ~ /^apps\\[0-9]+\\desktop=/) {
+          if (index($0, d) > 0) dup=1;
+          buf = buf $0 ORS; next
+        }
+        if ($0 ~ /^apps\\size=/) { next }
+        buf = buf $0 ORS; next
+      }
+      print
+    }
+    END{
+      if (in==1) { print_section(); }
+    }
+  ' "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
+
+  # Restart panel to apply
+  if is_cmd lxqt-panel; then
+    if lxqt-panel --help >/dev/null 2>&1 && lxqt-panel --help | grep -q -- '--restart'; then
+      lxqt-panel --restart >/dev/null 2>&1 || true
+    else
+      pkill -x lxqt-panel >/dev/null 2>&1 || true
+      (nohup lxqt-panel >/dev/null 2>&1 &)
+    fi
   fi
 }
 
-# ====== 1) Cập nhật & gói nền ======
-base_setup() {
+# ===== 1) Base =====
+base_setup(){
   need_sudo
-  log "🔄 Đang cập nhật hệ thống & thêm universe..."
+  log "🔄 Cập nhật hệ thống..."
   sudo add-apt-repository universe -y || true
   sudo apt update && sudo apt upgrade -y
-
-  log "📦 Cài Open VM Tools..."
-  sudo apt install -y open-vm-tools open-vm-tools-desktop || echo "⚠️ Không có gói Open VM Tools phù hợp."
-
-  log "📦 Cài unzip, build-essential & Qt5 libs (cho Nekobox)..."
+  sudo apt install -y open-vm-tools open-vm-tools-desktop || echo "⚠️ Open VM Tools không khả dụng."
   sudo apt install -y unzip build-essential \
     libqt5network5 libqt5core5a libqt5gui5 libqt5widgets5 \
     qtbase5-dev libqt5x11extras5 libqt5quick5 libqt5quickwidgets5 libqt5quickparticles5
-
   log "✅ Hoàn tất bước nền."
 }
 
-# ====== 2) Cài Chrome từ Google Drive & tắt update ======
-install_chrome_from_drive() {
+# ===== 2) Chrome =====
+install_chrome_from_drive(){
   ensure_gdown
-
   local CHROME_DRIVE_ID="${CHROME_DRIVE_ID:-1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1}"
   local DOWNLOAD_DIR="$HOME/browser_temp"
   mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-
   log "📥 Tải thư mục Chrome từ Google Drive..."
   gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies
-
-  log "🔍 Liệt kê các gói Chrome (.deb) đã tải:"
   mapfile -t FILES < <(find "$DOWNLOAD_DIR" -type f -name "*.deb" | sort)
-  if (( ${#FILES[@]} == 0 )); then
-    echo "❌ Không tìm thấy file .deb nào trong thư mục tải về!"; exit 1
-  fi
+  (( ${#FILES[@]} )) || { echo "❌ Không tìm thấy file .deb."; exit 1; }
   nl -w2 -s". " <(printf "%s\n" "${FILES[@]}")
   read -rp "👉 Nhập số thứ tự file Chrome muốn cài: " choice
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#FILES[@]} )); then
-    echo "❌ Lựa chọn không hợp lệ!"; exit 1
-  fi
+  [[ "$choice" =~ ^[0-9]+$ ]] && (( choice>=1 && choice<=${#FILES[@]} )) || { echo "❌ Lựa chọn không hợp lệ!"; exit 1; }
   local FILE_SELECT="${FILES[$((choice-1))]}"
   echo "✅ Chọn file: $FILE_SELECT"
-
-  log "🧹 Dọn dẹp file không dùng..."
   find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete || true
 
   need_sudo
-  log "🗑️ Gỡ Chrome bản đang có (nếu có)..."
   sudo apt remove -y google-chrome-stable || true
-
-  log "🚀 Cài Chrome từ gói đã chọn..."
-  sudo dpkg -i "$FILE_SELECT" || sudo apt -f install -y
+  if ! sudo dpkg -i "$FILE_SELECT"; then
+    sudo apt -f install -y --allow-change-held-packages || true
+    sudo dpkg -i "$FILE_SELECT" || true
+  fi
   sudo apt-mark hold google-chrome-stable || true
   sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null || true
 
   log "🚫 Tắt update nội bộ Chrome..."
-  sudo rm -rf /opt/google/chrome/cron/ || true
+  if [[ -d /opt/google/chrome/cron ]]; then
+    sudo rm -rf /opt/google/chrome/cron/ || true
+    sudo chmod -R 000 /opt/google/chrome/cron || true
+  fi
   sudo mkdir -p /etc/opt/chrome/policies/managed
   cat <<'JSON' >/tmp/disable_update.json
 {
@@ -116,9 +153,9 @@ install_chrome_from_drive() {
 }
 JSON
   sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
-  sudo chmod -R 000 /opt/google/chrome/cron || true
 
   log "🎨 Tạo shortcut Chrome (Custom)..."
+  mkdir -p ~/.local/share/applications
   cat <<'EOF' > ~/.local/share/applications/browser_custom.desktop
 [Desktop Entry]
 Name=Google Chrome (Custom)
@@ -129,28 +166,22 @@ Categories=Network;WebBrowser;
 StartupNotify=true
 EOF
 
-  if is_cmd gsettings; then
+  if is_gnome; then
     gio set ~/.local/share/applications/browser_custom.desktop metadata::trusted true 2>/dev/null || true
     gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
-  else
-    echo "ℹ️ Lubuntu (LXQt): hãy nhấp phải biểu tượng trong menu -> 'Pin to Panel'."
   fi
-
-  log "✅ Hoàn tất cài Chrome (đã khóa & tắt update nội bộ)."
+  if is_lxqt; then
+    pin_lxqt_quicklaunch "$HOME/.local/share/applications/browser_custom.desktop"
+  fi
+  log "✅ Chrome đã cài & khóa update."
 }
 
-# ====== 3) Sửa vấn đề password + auto-login ======
-fix_passwords() {
+# ===== 3) Password & autologin =====
+fix_passwords(){
   need_sudo
-  log "🔧 Đang sửa tất cả vấn đề password..."
-
-  log "🔓 Xóa password user..."
+  log "🔧 Sửa vấn đề password & autologin..."
   sudo passwd -d "$USER" || true
-
-  log "⚡ Cấu hình sudo không cần password..."
   echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee "/etc/sudoers.d/$USER" >/dev/null
-
-  log "🚀 Cấu hình auto-login cho LightDM (Lubuntu)..."
   sudo mkdir -p /etc/lightdm/lightdm.conf.d
   sudo tee /etc/lightdm/lightdm.conf.d/50-autologin.conf >/dev/null <<EOF
 [Seat:*]
@@ -158,52 +189,27 @@ autologin-user=$USER
 autologin-user-timeout=0
 autologin-session=Lubuntu
 EOF
-
-  log "🚀 Cấu hình auto-login cho GDM3 (Ubuntu)..."
   sudo tee /etc/gdm3/custom.conf >/dev/null <<EOF
 [daemon]
 AutomaticLoginEnable=true
 AutomaticLogin=$USER
 EOF
 
-  log "🔑 Gỡ GNOME Keyring & KDE Wallet (nếu có)..."
   sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
   sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
-
-  log "🗑️ Xóa dữ liệu keyring..."
   rm -rf ~/.local/share/keyrings ~/.gnupg ~/.config/kwalletrc 2>/dev/null || true
-
-  log "🔒 Vô hiệu PAM keyring..."
   sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/login 2>/dev/null || true
   sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/passwd 2>/dev/null || true
   sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-password 2>/dev/null || true
   sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-autologin 2>/dev/null || true
 
-  log "🛡️ Tắt PolicyKit password prompts..."
-  sudo mkdir -p /etc/polkit-1/localauthority/50-local.d
-  sudo tee /etc/polkit-1/localauthority/50-local.d/disable-passwords.pkla >/dev/null <<EOF
-[Disable password prompts for $USER]
-Identity=unix-user:$USER
-Action=*
-ResultActive=yes
-ResultInactive=yes
-ResultAny=yes
-EOF
-
-  log "🌐 Cấu hình Chrome không hỏi password..."
   mkdir -p ~/.config/google-chrome/Default
   cat > ~/.config/google-chrome/Default/Preferences <<'EOF'
 {
-   "profile": {
-      "password_manager_enabled": false,
-      "default_content_setting_values": {
-         "password_manager": 2
-      }
-   }
+  "profile": { "password_manager_enabled": false,
+    "default_content_setting_values": { "password_manager": 2 } }
 }
 EOF
-
-  log "⚙️ Tạo .desktop cho Chrome dùng --password-store=basic..."
   sudo rm -f /usr/share/applications/google-chrome.desktop 2>/dev/null || true
   cat > ~/.local/share/applications/google-chrome.desktop <<'EOF'
 [Desktop Entry]
@@ -219,38 +225,24 @@ Categories=Network;WebBrowser;
 MimeType=text/html;text/xml;application/xhtml+xml;
 EOF
   chmod +x ~/.local/share/applications/google-chrome.desktop
-
-  log "✅ ĐÃ SỬA XONG."
+  log "✅ Xong phần password & autologin."
 }
 
-# ====== 4) Cài Nekobox ======
-install_nekobox() {
+# ===== 4) Nekobox =====
+install_nekobox(){
   ensure_gdown
-  log "📂 Chuẩn bị thư mục Nekobox..."
-  rm -rf "$HOME/Downloads/nekoray"
-  mkdir -p "$HOME/Downloads/nekoray"
-
-  log "⬇️ Tải Nekobox từ Google Drive..."
+  log "📂 Chuẩn bị Nekobox..."
+  rm -rf "$HOME/Downloads/nekoray"; mkdir -p "$HOME/Downloads/nekoray"
   cd "$HOME/Downloads"
   local FILE_ID="${NEKOBOX_FILE_ID:-1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj}"
-  gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Tải thất bại! Kiểm tra FILE_ID."; return 1; }
-
-  log "📂 Giải nén..."
+  gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Tải thất bại."; return 1; }
   unzip -o nekobox.zip -d "$HOME/Downloads/nekoray"
-
-  local inner_dir
-  inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
+  local inner_dir; inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
   if [[ -n "${inner_dir:-}" && "$inner_dir" != "$HOME/Downloads/nekoray" ]]; then
-    log "📂 Điều chỉnh cấu trúc thư mục..."
-    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true
-    rm -rf "$inner_dir"
+    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true; rm -rf "$inner_dir"
   fi
+  cd "$HOME/Downloads/nekoray"; chmod +x launcher nekobox nekobox_core 2>/dev/null || true
 
-  log "🔑 Cấp quyền thực thi..."
-  cd "$HOME/Downloads/nekoray"
-  chmod +x launcher nekobox nekobox_core 2>/dev/null || echo "⚠️ Một số file không tồn tại, bỏ qua."
-
-  log "🖥️ Tạo shortcut Desktop & autostart..."
   cat <<EOF > "$HOME/Desktop/nekoray.desktop"
 [Desktop Entry]
 Version=1.0
@@ -263,33 +255,28 @@ Type=Application
 Categories=Utility;
 EOF
   chmod +x "$HOME/Desktop/nekoray.desktop"
+  mkdir -p "$HOME/.local/share/applications"
+  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.local/share/applications/nekoray.desktop"
 
-  mkdir -p "$HOME/.config/autostart"
-  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"
-  chmod +x "$HOME/.config/autostart/nekoray.desktop"
+  mkdir -p "$HOME/.config/autostart"; cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"; chmod +x "$HOME/.config/autostart/nekoray.desktop"
 
-  if [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]]; then
-    log "📌 GNOME: pin Nekobox vào favorites..."
+  if is_gnome; then
     gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
-  elif [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt ]]; then
-    log "📌 LXQt không hỗ trợ auto pin — bạn có thể kéo shortcut vào panel."
-  else
-    log "ℹ️ Môi trường desktop không xác định: ${XDG_CURRENT_DESKTOP:-unknown}."
   fi
-
-  log "🚀 Thử chạy Nekobox..."
-  ./nekobox || echo "⚠️ Không tự chạy được — mở bằng $HOME/Downloads/nekoray/nekobox."
-
-  log "✅ Hoàn tất cài Nekobox."
+  if is_lxqt; then
+    pin_lxqt_quicklaunch "$HOME/.local/share/applications/nekoray.desktop"
+  fi
+  ./nekobox || echo "ℹ️ Không tự chạy được — mở thủ công từ $HOME/Downloads/nekoray/nekobox."
+  log "✅ Nekobox đã cài."
 }
 
-# ====== AUTO RUN ======
-main() {
-  log "===== AIO Setup 24.04 (Auto-run v2) ====="
+# ===== Auto-run =====
+main(){
+  log "===== AIO Setup 24.04 (Auto-run v6, LXQt auto-pin, no proxy) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
   install_nekobox
-  log "🎉 Tất cả bước đã chạy xong. Khuyến nghị tự reboot máy để áp dụng hoàn toàn."
+  log "🎉 Hoàn tất. Khuyến nghị reboot."
 }
 main
