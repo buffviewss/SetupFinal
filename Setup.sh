@@ -7,14 +7,30 @@
 set -euo pipefail
 
 # === CONFIGURATION ===
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# DOWNLOAD_DIR="$HOME/Downloads/browser_setup"
+# LOG_FILE="$SCRIPT_DIR/setup.log"
+
+# Vị trí script: fallback về thư mục hiện tại khi chạy từ /dev/fd/*
+SCRIPT_SRC="${BASH_SOURCE[0]:-$0}"
+if [[ "$SCRIPT_SRC" == /dev/* ]]; then
+  SCRIPT_DIR="$PWD"
+else
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SRC")" && pwd)"
+fi
+
 DOWNLOAD_DIR="$HOME/Downloads/browser_setup"
-LOG_FILE="$SCRIPT_DIR/setup.log"
+
+# Đặt log vào thư mục người dùng, luôn tồn tại
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/browser_setup"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/setup.log"
+
 
 # Google Drive folder IDs
-CHROME_DRIVE_ID="1example_chrome_folder_id"
-FIREFOX_DRIVE_ID="1example_firefox_folder_id"
-NEKOBOX_DRIVE_ID="1example_nekobox_folder_id"
+CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
+FIREFOX_DRIVE_ID="1CeMNJTLgfsaFkcroOh1xpxFC-uz9HrLb"
+NEKOBOX_DRIVE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"
 
 # === LOGGING ===
 log() {
