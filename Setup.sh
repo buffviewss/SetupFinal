@@ -1,8 +1,8 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v13
-# - Based on v12
-# - Force install gdown>=5.2.0 and verify `gdown list` availability
-# - If an old venv exists without `list`, recreate it automatically
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v14
+# - Based on v13
+# - Fix: detect `gdown list` by running `gdown list --help` (not grepping global help)
+# - Still forces gdown>=5.2.0 and will recreate venv if needed
 
 set -euo pipefail
 
@@ -33,7 +33,7 @@ ensure_gdown(){
   if [[ -d "$VENV" && -f "$VENV/bin/activate" ]]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
-    if ! gdown --help 2>&1 | grep -q -E ' list( |$)'; then
+    if ! (gdown list --help >/dev/null 2>&1); then
       deactivate || true
       rm -rf "$VENV"
     fi
@@ -47,9 +47,12 @@ ensure_gdown(){
     source "$VENV/bin/activate"
     python -m pip install --no-cache-dir --upgrade pip
     python -m pip install --no-cache-dir --upgrade "gdown>=5.2.0"
-    # Final verification
-    if ! gdown --help 2>&1 | grep -q -E ' list( |$)'; then
-      echo "⚠️ Không tìm thấy subcommand 'list' dù đã nâng cấp gdown. Sẽ yêu cầu bạn nhập FILE_ID."
+    # Final verification using subcommand help
+    if (gdown list --help >/dev/null 2>&1); then
+      export GDOWN_HAS_LIST=1
+    else
+      export GDOWN_HAS_LIST=0
+      echo "⚠️ Không gọi được 'gdown list --help'. Sẽ yêu cầu bạn nhập FILE_ID."
     fi
     return 0
   fi
@@ -58,6 +61,11 @@ ensure_gdown(){
   python3 -m pip install --user --no-cache-dir --upgrade pip || true
   python3 -m pip install --user --no-cache-dir --upgrade "gdown>=5.2.0"
   export PATH="$HOME/.local/bin:$PATH"
+  if (gdown list --help >/dev/null 2>&1); then
+    export GDOWN_HAS_LIST=1
+  else
+    export GDOWN_HAS_LIST=0
+  fi
   is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
 }
 
@@ -157,7 +165,7 @@ choose_chrome_file_from_drive(){
   local FOLDER_URL="https://drive.google.com/drive/folders/$CHROME_DRIVE_ID"
   local raw=""
 
-  if gdown --help 2>&1 | grep -q -E ' list( |$)'; then
+  if [[ "${GDOWN_HAS_LIST:-0}" -eq 1 ]] && (gdown list --help >/dev/null 2>&1); then
     log "📋 Lấy danh sách file trong thư mục Drive (không tải xuống)..."
     raw="$(gdown list "$FOLDER_URL" --no-cookies 2>/dev/null || true)"
   fi
@@ -360,7 +368,7 @@ EOF
 
 # ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v13, gdown>=5.2.0) ====="
+  log "===== AIO Setup 24.04 (Auto-run v14, better gdown list detect) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
