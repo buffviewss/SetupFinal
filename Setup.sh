@@ -238,67 +238,128 @@ EOF
 get_chrome_file_list() {
     log "🔍 Getting Chrome file list from Google Drive..."
 
-    # Create temp directory for listing files
+    # Method 1: Use gdown with --dry-run to get file list without downloading
+    local file_list=""
     local temp_dir="/tmp/chrome_list_$$"
+
+    log "📋 Attempting to list files from Drive folder..."
+
+    # Try multiple approaches to get the actual file list
+
+    # Approach 1: Use gdown folder with minimal download
     mkdir -p "$temp_dir" && cd "$temp_dir"
 
-    # Download folder to get file list (with timeout for Ubuntu 24.04)
-    timeout 120 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet 2>/dev/null || {
-        echo "❌ Failed to get Chrome file list from Drive (timeout or network error)"
-        rm -rf "$temp_dir"
-        return 1
-    }
+    # Try to get file listing with very short timeout first
+    if timeout 45 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet 2>/dev/null; then
+        # Look for any .deb files that were downloaded or listed
+        file_list=$(find "$temp_dir" -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
-    # Get ALL files in the folder
-    local file_list
-    file_list=$(find "$temp_dir" -type f -exec basename {} \; | sort)
+        if [[ -n "$file_list" ]]; then
+            log "✅ Successfully retrieved actual file list from Drive"
+            rm -rf "$temp_dir"
+            echo "$file_list"
+            return 0
+        fi
+    fi
 
-    # Clean up temp directory
-    rm -rf "$temp_dir"
+    # Approach 2: Try with different gdown parameters
+    rm -rf "$temp_dir" 2>/dev/null || true
+    mkdir -p "$temp_dir" && cd "$temp_dir"
 
-    echo "$file_list"
+    log "🔄 Trying alternative method to get file list..."
+    if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok --quiet 2>/dev/null; then
+        file_list=$(find "$temp_dir" -type f -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
+
+        if [[ -n "$file_list" ]]; then
+            log "✅ Retrieved file list using alternative method"
+            rm -rf "$temp_dir"
+            echo "$file_list"
+            return 0
+        fi
+    fi
+
+    # Clean up
+    rm -rf "$temp_dir" 2>/dev/null || true
+
+    # Method 2: If all else fails, return empty to trigger latest download
+    log "⚠️ Could not retrieve file list from Drive folder"
+    log "💡 This might be due to network issues or Drive permissions"
+    echo ""
 }
 
 select_chrome_version() {
     echo "=============================================="
     echo "  🌐 CHROME VERSION SELECTION"
     echo "=============================================="
-    
+
     local file_list
     file_list=$(get_chrome_file_list)
 
-    if [[ -z "$file_list" ]]; then
-        log "⚠️ Could not retrieve Chrome file list, using latest version"
-        echo "latest"
-        return 0
-    fi
+    # Check if we got actual files from Drive
+    if [[ -n "$file_list" ]]; then
+        echo "📁 Available Chrome versions in your Google Drive folder:"
+        echo ""
 
-    echo "Choose Chrome version to install:"
-    echo ""
+        # Add download latest option
+        local options=("Download Latest Chrome (Recommended)")
 
-    # Add download latest option
-    local options=("Download Latest Chrome (Recommended)")
+        # Add ALL actual files from drive
+        local file_count=0
+        while IFS= read -r file; do
+            if [[ -n "$file" ]]; then
+                options+=("$file")
+                file_count=$((file_count + 1))
+                echo "   📦 $file"
+            fi
+        done <<< "$file_list"
 
-    # Add ALL files from drive
-    while IFS= read -r file; do
-        [[ -n "$file" ]] && options+=("$file")
-    done <<< "$file_list"
+        echo ""
+        echo "📊 Found $file_count Chrome versions in your Drive folder"
+        echo ""
+        echo "Choose Chrome version to install:"
+        echo ""
 
-    select version in "${options[@]}"; do
-        case $version in
-            "Download Latest Chrome (Recommended)") echo "latest"; return 0;;
-            *)
-                if [[ -n "$version" ]]; then
-                    echo "$version"
-                    return 0
-                else
-                    echo "❌ Invalid option! Using latest version..."
+        select version in "${options[@]}"; do
+            case $version in
+                "Download Latest Chrome (Recommended)")
+                    log "🌐 User selected: Download Latest Chrome"
                     echo "latest"
                     return 0
-                fi
-                ;;
-        esac
-    done
+                    ;;
+                *)
+                    if [[ -n "$version" ]]; then
+                        log "📦 User selected: $version"
+                        echo "$version"
+                        return 0
+                    else
+                        echo "❌ Invalid option! Using latest version..."
+                        log "⚠️ Invalid selection, defaulting to latest"
+                        echo "latest"
+                        return 0
+                    fi
+                    ;;
+            esac
+        done
+    else
+        # No files found in Drive, offer only latest
+        echo "⚠️ Could not access files in Google Drive folder"
+        echo "📡 This might be due to:"
+        echo "   • Network connectivity issues"
+        echo "   • Google Drive folder permissions"
+        echo "   • Folder ID incorrect"
+        echo ""
+        echo "🌐 Will download latest Chrome from official Google source"
+        echo ""
+        read -p "Continue with latest Chrome? (y/n): " -r
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            log "🌐 User chose to continue with latest Chrome"
+            echo "latest"
+            return 0
+        else
+            log "❌ User cancelled installation"
+            exit 1
+        fi
+    fi
 }
 
 # === CHROME DOWNLOAD & INSTALLATION ===
@@ -320,22 +381,29 @@ download_specific_chrome_file() {
 
     mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
-    log "📥 Downloading Chrome: $version..."
+    log "📥 Downloading Chrome: $version from Google Drive..."
 
-    # Download entire folder (with timeout for Ubuntu 24.04)
-    timeout 300 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies
+    # Try to download the entire folder with longer timeout for large files
+    log "⏳ This may take a few minutes for large files (100MB+)..."
+    if timeout 600 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet; then
+        # Find the specific file (exact name match)
+        local downloaded_file
+        downloaded_file=$(find "$DOWNLOAD_DIR" -name "$version" | head -n 1)
 
-    # Find the specific file (exact name match)
-    local downloaded_file
-    downloaded_file=$(find "$DOWNLOAD_DIR" -name "$version" | head -n 1)
-
-    if [[ -z "$downloaded_file" ]]; then
-        log "❌ File $version not found after download, using latest version"
-        download_latest_chrome
-        return 0
+        if [[ -n "$downloaded_file" && -f "$downloaded_file" ]]; then
+            log "✅ Successfully downloaded: $version"
+            echo "$downloaded_file"
+            return 0
+        else
+            log "❌ File $version not found in downloaded folder"
+        fi
+    else
+        log "❌ Failed to download from Google Drive (timeout or network error)"
     fi
 
-    echo "$downloaded_file"
+    # Fallback to latest version
+    log "🔄 Falling back to latest Chrome version..."
+    download_latest_chrome
 }
 
 # === CHROME REMOVAL ===
@@ -645,6 +713,164 @@ EOF
     log "📋 Run ~/check-chrome-updates.sh to verify blocking status"
 }
 
+# === CREATE SYSTEM VERIFICATION SCRIPT ===
+create_verification_script() {
+    log "📋 Creating system verification script..."
+
+    tee ~/check-system-setup.sh >/dev/null << 'EOF'
+#!/bin/bash
+
+echo "=============================================="
+echo "  🔍 SYSTEM SETUP VERIFICATION"
+echo "=============================================="
+echo ""
+
+# Machine ID
+echo "🆔 Machine ID:"
+if [[ -f ~/.machine_id ]]; then
+    echo "   $(cat ~/.machine_id)"
+else
+    echo "   ❌ Machine ID not found"
+fi
+echo ""
+
+# Random Fonts Check
+echo "🎨 Random Fonts Status:"
+echo "   Selected fonts for this machine:"
+MACHINE_ID=$(cat ~/.machine_id 2>/dev/null || echo "unknown")
+echo "   Machine ID: $MACHINE_ID"
+
+echo ""
+echo "   Installed font packages:"
+dpkg -l | grep -E "fonts-(noto|liberation|dejavu|ubuntu|roboto|open-sans|lato|source-code|fira|cascadia|jetbrains|hack|inconsolata|droid)" | awk '{print "   ✅ " $2}'
+
+echo ""
+echo "   Available fonts in system:"
+fc-list | grep -E "(Noto|Liberation|DejaVu|Ubuntu|Roboto|Open Sans|Lato|Source Code|Fira|Cascadia|JetBrains|Hack|Inconsolata|Droid)" | wc -l | awk '{print "   📊 Total fonts available: " $1}'
+
+echo ""
+
+# Random Audio Check
+echo "🔊 Random Audio Status:"
+DESKTOP_ENV=""
+if [[ -n "${XDG_CURRENT_DESKTOP:-}" ]]; then
+    DESKTOP_ENV="$XDG_CURRENT_DESKTOP"
+elif [[ -n "${DESKTOP_SESSION:-}" ]]; then
+    DESKTOP_ENV="$DESKTOP_SESSION"
+fi
+
+case "$DESKTOP_ENV" in
+    *"GNOME"*|*"gnome"*)
+        echo "   Desktop: GNOME"
+        AUDIO_THEME=$(gsettings get org.gnome.desktop.sound theme-name 2>/dev/null || echo "not-set")
+        echo "   Audio theme: $AUDIO_THEME"
+        SOUND_ENABLED=$(gsettings get org.gnome.desktop.sound event-sounds 2>/dev/null || echo "not-set")
+        echo "   Sound events: $SOUND_ENABLED"
+        ;;
+    *"LXQt"*|*"lxqt"*|*"Lubuntu"*)
+        echo "   Desktop: LXQt/Lubuntu"
+        if [[ -f ~/.config/lxqt/lxqt.conf ]]; then
+            AUDIO_THEME=$(grep "theme=" ~/.config/lxqt/lxqt.conf 2>/dev/null | cut -d'=' -f2 || echo "not-set")
+            echo "   Audio theme: $AUDIO_THEME"
+        else
+            echo "   ❌ LXQt config not found"
+        fi
+        ;;
+    *)
+        echo "   Desktop: $DESKTOP_ENV"
+        echo "   ⚠️ Audio theme detection not supported for this desktop"
+        ;;
+esac
+
+# Volume check
+VOLUME=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -oP '\d+%' | head -1 || echo "unknown")
+echo "   Current volume: $VOLUME"
+
+echo ""
+
+# Audio packages check
+echo "   Installed audio packages:"
+dpkg -l | grep -E "(pulseaudio|alsa-utils|ubuntu-sounds|gnome-audio|sound-)" | awk '{print "   ✅ " $2}'
+
+echo ""
+
+# Chrome Status
+echo "🌐 Chrome Status:"
+if command -v google-chrome-stable &> /dev/null; then
+    CHROME_VERSION=$(google-chrome-stable --version 2>/dev/null)
+    echo "   ✅ $CHROME_VERSION"
+
+    # Check if Chrome is default browser
+    DEFAULT_BROWSER=$(xdg-settings get default-web-browser 2>/dev/null || echo "unknown")
+    echo "   Default browser: $DEFAULT_BROWSER"
+
+    # Check update blocking
+    UPDATE_BLOCKS=$(grep -c "update.googleapis.com" /etc/hosts 2>/dev/null || echo "0")
+    echo "   Update blocks in hosts: $UPDATE_BLOCKS"
+
+    PACKAGE_HOLD=$(apt-mark showhold | grep chrome | wc -l)
+    echo "   Package holds: $PACKAGE_HOLD"
+else
+    echo "   ❌ Chrome not installed"
+fi
+
+echo ""
+
+# NekoBox Status
+echo "🔧 NekoBox Status:"
+if [[ -f /usr/local/bin/nekobox ]]; then
+    echo "   ✅ NekoBox installed at /usr/local/bin/nekobox"
+
+    # Check autostart
+    if [[ -f ~/.config/autostart/nekobox.desktop ]]; then
+        echo "   ✅ Autostart configured"
+    else
+        echo "   ❌ Autostart not configured"
+    fi
+
+    # Check if running
+    if pgrep -f nekobox > /dev/null; then
+        echo "   ✅ NekoBox is running"
+    else
+        echo "   ⚠️ NekoBox is not running"
+    fi
+else
+    echo "   ❌ NekoBox not installed"
+fi
+
+echo ""
+
+# Password-free status
+echo "🔐 Password-free Status:"
+if sudo -n true 2>/dev/null; then
+    echo "   ✅ Sudo works without password"
+else
+    echo "   ❌ Sudo still requires password"
+fi
+
+# Check auto-login
+if [[ -f /etc/lightdm/lightdm.conf.d/50-autologin.conf ]] || [[ -f /etc/gdm3/custom.conf ]]; then
+    echo "   ✅ Auto-login configured"
+else
+    echo "   ❌ Auto-login not configured"
+fi
+
+echo ""
+echo "=============================================="
+echo "  📊 VERIFICATION COMPLETE"
+echo "=============================================="
+echo ""
+echo "💡 Tips:"
+echo "   • Test fonts: Open LibreOffice and check font list"
+echo "   • Test audio: Run 'paplay /usr/share/sounds/alsa/Front_Left.wav'"
+echo "   • Check Chrome updates: Run '~/check-chrome-updates.sh'"
+echo ""
+EOF
+
+    chmod +x ~/check-system-setup.sh
+    log "✅ Verification script created: ~/check-system-setup.sh"
+}
+
 create_nekobox_shortcut() {
     mkdir -p ~/.local/share/applications
     cat > ~/.local/share/applications/nekobox.desktop << EOF
@@ -920,6 +1146,9 @@ install_full_setup() {
     log "🔐 Step 6/6: Fixing password issues..."
     fix_password_issues
 
+    # Step 6: Create verification script
+    create_verification_script
+
     # Installation completed
     echo ""
     echo "=============================================="
@@ -940,6 +1169,9 @@ install_full_setup() {
     echo "🛡️ Chrome Update Blocking:"
     echo "   ✅ 10-layer protection against auto-updates"
     echo "   ✅ Run ~/check-chrome-updates.sh to verify status"
+    echo ""
+    echo "🔍 System Verification:"
+    echo "   ✅ Run ~/check-system-setup.sh to check all features"
     echo ""
     read -p "🔄 Reboot now to complete setup? (y/n): " -r
     if [[ $REPLY =~ ^[Yy]$ ]]; then
