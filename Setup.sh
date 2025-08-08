@@ -73,12 +73,15 @@ Categories=Network;WebBrowser;
 StartupNotify=true
 EOF3
 
-    # Pin vào taskbar nếu có thể
+    # Pin vào taskbar nếu GNOME
     if command -v gsettings &>/dev/null; then
-        gio set ~/.local/share/applications/browser_custom.desktop metadata::trusted true 2>/dev/null
-        gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
+        if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
+            gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
+        else
+            echo "ℹ️ Môi trường desktop không phải GNOME, không thể pin vào taskbar."
+        fi
     else
-        echo "ℹ️ Trên Lubuntu (LXQt), hãy nhấp phải biểu tượng trong menu -> 'Pin to Panel'."
+        echo "ℹ️ Không tìm thấy gsettings, không thể pin vào taskbar."
     fi
 
     echo "✅ Chrome đã được cài, khóa update và tắt update nội bộ."
@@ -136,6 +139,14 @@ echo "📌 Pin Nekobox vào taskbar và thêm vào autostart..."
 mkdir -p ~/.config/autostart
 cp ~/Desktop/nekoray.desktop ~/.config/autostart/nekoray.desktop
 chmod +x ~/.config/autostart/nekoray.desktop
+
+# Tùy chỉnh theo môi trường Desktop
+if echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
+    echo "ℹ️ Lubuntu LXQt detected, pinning Nekobox manually on the panel."
+    echo "ℹ️ Bạn có thể kéo shortcut vào panel."
+else
+    echo "ℹ️ Môi trường khác, Nekobox đã được cài vào autostart."
+fi
 
 echo "✅ Nekobox đã được cài đặt thành công!"
 
