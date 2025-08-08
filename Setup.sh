@@ -236,43 +236,43 @@ EOF
 
 # === CHROME VERSION SELECTION ===
 get_chrome_file_list() {
-    # Silent operation - no logging during file list retrieval
+    # Completely silent operation - redirect ALL output to /dev/null
     local file_list=""
     local temp_dir="/tmp/chrome_list_$$"
 
     # Try multiple approaches to get the actual file list
 
     # Approach 1: Use gdown folder with minimal download
-    mkdir -p "$temp_dir" && cd "$temp_dir"
+    mkdir -p "$temp_dir" >/dev/null 2>&1 && cd "$temp_dir" >/dev/null 2>&1
 
-    # Try to get file listing with very short timeout first
-    if timeout 45 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet 2>/dev/null; then
+    # Try to get file listing with very short timeout first - completely silent
+    if timeout 45 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --quiet >/dev/null 2>&1; then
         # Look for any .deb files that were downloaded or listed
         file_list=$(find "$temp_dir" -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
         if [[ -n "$file_list" ]]; then
-            rm -rf "$temp_dir"
+            rm -rf "$temp_dir" >/dev/null 2>&1
             echo "$file_list"
             return 0
         fi
     fi
 
     # Approach 2: Try with different gdown parameters
-    rm -rf "$temp_dir" 2>/dev/null || true
-    mkdir -p "$temp_dir" && cd "$temp_dir"
+    rm -rf "$temp_dir" >/dev/null 2>&1
+    mkdir -p "$temp_dir" >/dev/null 2>&1 && cd "$temp_dir" >/dev/null 2>&1
 
-    if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok --quiet 2>/dev/null; then
+    if timeout 60 gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies --remaining-ok --quiet >/dev/null 2>&1; then
         file_list=$(find "$temp_dir" -type f -name "*.deb" -exec basename {} \; 2>/dev/null | sort -V)
 
         if [[ -n "$file_list" ]]; then
-            rm -rf "$temp_dir"
+            rm -rf "$temp_dir" >/dev/null 2>&1
             echo "$file_list"
             return 0
         fi
     fi
 
     # Clean up
-    rm -rf "$temp_dir" 2>/dev/null || true
+    rm -rf "$temp_dir" >/dev/null 2>&1
 
     # Return empty if failed
     echo ""
@@ -365,16 +365,36 @@ download_latest_chrome() {
     mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
     log "📥 Downloading latest Chrome from official source..."
-    wget -O chrome-latest.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"
-    echo "$DOWNLOAD_DIR/chrome-latest.deb"
+
+    # Download with proper error checking
+    if wget -O chrome-latest.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb"; then
+        # Verify the file was downloaded and has reasonable size
+        if [[ -f "chrome-latest.deb" ]] && [[ $(stat -f%z "chrome-latest.deb" 2>/dev/null || stat -c%s "chrome-latest.deb" 2>/dev/null) -gt 50000000 ]]; then
+            log "✅ Successfully downloaded Chrome ($(du -h chrome-latest.deb | cut -f1))"
+            echo "$DOWNLOAD_DIR/chrome-latest.deb"
+            return 0
+        else
+            log "❌ Downloaded file is invalid or too small"
+            rm -f chrome-latest.deb 2>/dev/null
+            return 1
+        fi
+    else
+        log "❌ Failed to download Chrome from official source"
+        rm -f chrome-latest.deb 2>/dev/null
+        return 1
+    fi
 }
 
 download_specific_chrome_file() {
     local version="$1"
 
     if [[ $version == "latest" ]]; then
-        download_latest_chrome
-        return 0
+        if download_latest_chrome; then
+            return 0
+        else
+            log "❌ Failed to download latest Chrome"
+            return 1
+        fi
     fi
 
     mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
@@ -401,7 +421,12 @@ download_specific_chrome_file() {
 
     # Fallback to latest version
     log "🔄 Falling back to latest Chrome version..."
-    download_latest_chrome
+    if download_latest_chrome; then
+        return 0
+    else
+        log "❌ All download methods failed"
+        return 1
+    fi
 }
 
 # === CHROME REMOVAL ===
