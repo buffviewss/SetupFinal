@@ -1,10 +1,6 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v15
-# - Based on v14
-# - Robust listing:
-#   * Detect support with `gdown list --help`
-#   * Try both folder URL and bare ID
-#   * If listing yields nothing, prompt FILE_ID with correct reason
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v16
+# - Stronger Google Drive folder listing logic
 
 set -euo pipefail
 
@@ -14,7 +10,6 @@ is_cmd(){ command -v "$1" &>/dev/null; }
 is_gnome(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ GNOME ]] && is_cmd gsettings && gsettings list-schemas 2>/dev/null | grep -q '^org.gnome.shell$'; }
 is_lxqt(){ [[ "${XDG_CURRENT_DESKTOP:-}" =~ LXQt|LXQT|LxQt ]] || pgrep -x lxqt-panel >/dev/null 2>&1; }
 
-# ===== helpers =====
 purge_if_installed(){
   need_sudo
   for pkg in "$@"; do
@@ -24,42 +19,33 @@ purge_if_installed(){
   done
 }
 
-# ===== gdown installer (force >=5.2.0) =====
 ensure_gdown(){
   need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip || true
-
   export PATH="$HOME/.local/bin:$PATH"
   local VENV="$HOME/gdown-venv"
 
-  # If venv exists but `gdown list` not available, wipe and recreate
   if [[ -d "$VENV" && -f "$VENV/bin/activate" ]]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
-    if ! (gdown list --help >/dev/null 2>&1); then
-      deactivate || true
-      rm -rf "$VENV"
-    fi
+    if ! (gdown list --help >/dev/null 2>&1); then deactivate || true; rm -rf "$VENV"; fi
   elif [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
     rm -rf "$VENV"
   fi
 
   [[ ! -f "$VENV/bin/activate" ]] && python3 -m venv "$VENV" || true
   if [[ -f "$VENV/bin/activate" ]]; then
-    # shellcheck disable=SC1091
     source "$VENV/bin/activate"
     python -m pip install --no-cache-dir --upgrade pip
     python -m pip install --no-cache-dir --upgrade "gdown>=5.2.0"
     return 0
   fi
 
-  # Fallback to user install (still force >=5.2.0)
   python3 -m pip install --user --no-cache-dir --upgrade pip || true
   python3 -m pip install --user --no-cache-dir --upgrade "gdown>=5.2.0"
   export PATH="$HOME/.local/bin:$PATH"
   is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
 }
 
-# ===== LXQt Quicklaunch helpers =====
 ensure_lxqt_quicklaunch_plugin(){
   local conf="$HOME/.config/lxqt/panel.conf"
   mkdir -p "$HOME/.config/lxqt"
@@ -125,7 +111,6 @@ pin_lxqt_quicklaunch(){
   fi
 }
 
-# ===== Extra hard lock for Chrome via APT pin =====
 lock_chrome_with_apt_pin(){
   need_sudo
   sudo mkdir -p /etc/apt/preferences.d
@@ -136,7 +121,6 @@ Pin-Priority: -1
 EOF
 }
 
-# ===== 1) Base =====
 base_setup(){
   need_sudo
   log "🔄 Cập nhật hệ thống..."
@@ -149,23 +133,32 @@ base_setup(){
   log "✅ Hoàn tất bước nền."
 }
 
-# --- FORCE choose .deb name/ID first (no folder download) ---
+# try list with a combination of flags; return 0 + populate CHOSEN_ID/NAME or set RAW_LIST for parsing
 choose_chrome_file_from_drive(){
   local CHROME_DRIVE_ID="$1"
   local FOLDER_URL="https://drive.google.com/drive/folders/$CHROME_DRIVE_ID"
   local raw=""
+  local tried=()
 
   if (gdown list --help >/dev/null 2>&1); then
     log "📋 Lấy danh sách file trong thư mục Drive (không tải xuống)..."
-    raw="$(gdown list "$FOLDER_URL" --no-cookies 2>/dev/null || true)"
-    if [[ -z "$raw" ]]; then
-      # try bare ID form as well
-      raw="$(gdown list "$CHROME_DRIVE_ID" --no-cookies 2>/dev/null || true)"
-    fi
+    # 1) URL + --format csv + --no-cookies
+    raw="$(gdown list "$FOLDER_URL" --format csv --no-cookies 2>/dev/null || true)"; tried+=("url+csv+nocookies")
+    # 2) bare ID + csv + nocookies
+    [[ -z "$raw" ]] && raw="$(gdown list "$CHROME_DRIVE_ID" --format csv --no-cookies 2>/dev/null || true)"; tried+=("id+csv+nocookies")
+    # 3) URL + csv (with cookies)
+    [[ -z "$raw" ]] && raw="$(gdown list "$FOLDER_URL" --format csv 2>/dev/null || true)"; tried+=("url+csv")
+    # 4) bare ID + csv (with cookies)
+    [[ -z "$raw" ]] && raw="$(gdown list "$CHROME_DRIVE_ID" --format csv 2>/dev/null || true)"; tried+=("id+csv")
+    # 5) URL plain
+    [[ -z "$raw" ]] && raw="$(gdown list "$FOLDER_URL" 2>/dev/null || true)"; tried+=("url+plain")
+    # 6) ID plain
+    [[ -z "$raw" ]] && raw="$(gdown list "$CHROME_DRIVE_ID" 2>/dev/null || true)"; tried+=("id+plain")
   fi
 
   if [[ -z "$raw" ]]; then
-    echo "⚠️ Không liệt kê được thư mục (có thể ID sai hoặc thư mục cần đăng nhập)."
+    echo "⚠️ Không liệt kê được thư mục. Đã thử: ${tried[*]}."
+    echo "👉 Có thể ID sai, thư mục không public, hoặc Google yêu cầu đăng nhập/captcha."
     echo "👉 Dán FILE_ID của gói .deb bạn muốn cài (bắt buộc, sẽ không tải cả thư mục):"
     read -rp "FILE_ID: " MANUAL_ID
     if [[ -z "${MANUAL_ID:-}" ]]; then
@@ -177,11 +170,29 @@ choose_chrome_file_from_drive(){
     return 0
   fi
 
+  # If CSV format
+  if echo "$raw" | head -n1 | grep -q 'id,name,size'; then
+    mapfile -t ids < <(echo "$raw" | awk -F, 'NR>1 && /\.deb($|")/ {print $1}')
+    mapfile -t names < <(echo "$raw" | awk -F, 'NR>1 && /\.deb($|")/ {print $2}')
+    if (( ${#ids[@]} == 0 )); then
+      echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
+    fi
+    echo "Các bản Chrome có sẵn:"
+    for i in "${!ids[@]}"; do printf "  %2d) %s\n" $((i+1)) "${names[$i]}"; done
+    read -rp "👉 Chọn số thứ tự gói cần tải & cài: " choice
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice<1 || choice>${#ids[@]} )); then
+      echo "❌ Lựa chọn không hợp lệ."; exit 1
+    fi
+    CHOSEN_ID="${ids[$((choice-1))]}"
+    CHOSEN_NAME="${names[$((choice-1))]}"
+    return 0
+  fi
+
+  # Plain text parse (fallback)
   mapfile -t rows < <(echo "$raw" | awk '/\.deb([[:space:]]|$)/ {print}')
   if (( ${#rows[@]} == 0 )); then
     echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
   fi
-
   echo "Các bản Chrome có sẵn:"
   declare -a IDS NAMES
   local idx=1
@@ -202,7 +213,6 @@ choose_chrome_file_from_drive(){
   return 0
 }
 
-# ===== 2) Chrome =====
 install_chrome_from_drive(){
   ensure_gdown
   local CHROME_DRIVE_ID="${CHROME_DRIVE_ID:-1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1}"
@@ -263,7 +273,6 @@ EOF
   log "✅ Chrome đã cài & khóa update."
 }
 
-# ===== 3) Password & autologin =====
 fix_passwords(){
   need_sudo
   log "🔧 Sửa vấn đề password & autologin..."
@@ -318,7 +327,6 @@ EOF
   log "✅ Xong phần password & autologin."
 }
 
-# ===== 4) Nekobox =====
 install_nekobox(){
   ensure_gdown
   log "📂 Chuẩn bị Nekobox..."
@@ -360,14 +368,12 @@ EOF
   log "✅ Nekobox đã cài."
 }
 
-# ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v15, robust list) ====="
+  log "===== AIO Setup 24.04 (Auto-run v16, strong list) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
   install_nekobox
-
   need_sudo
   sudo apt autoremove -y || true
   sudo apt clean || true
