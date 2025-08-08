@@ -36,9 +36,15 @@ if ! command -v google-chrome &> /dev/null; then
 
     echo "✅ Chọn file: $FILE_SELECT"
 
-    # Gỡ cài đặt bản Chrome mặc định nếu có
-    echo "🗑️ Gỡ bản mặc định..."
-    sudo apt remove -y google-chrome-stable || true
+    # Gỡ bỏ Google Chrome cũ nếu có (gỡ sạch sẽ)
+    echo "🗑️ Gỡ bỏ bản Google Chrome cũ..."
+    sudo apt remove --purge -y google-chrome-stable || true
+    sudo apt remove --purge -y google-chrome || true
+    sudo rm -rf /opt/google/chrome
+    sudo rm -rf ~/.config/google-chrome
+    sudo rm -rf /etc/opt/chrome
+    sudo rm -rf /usr/share/applications/google-chrome.desktop
+    sudo rm -rf ~/.local/share/applications/google-chrome.desktop
 
     # Cài đặt Chrome
     echo "🚀 Đang cài đặt Chrome..."
@@ -73,7 +79,7 @@ Categories=Network;WebBrowser;
 StartupNotify=true
 EOF3
 
-    # Pin vào taskbar nếu GNOME
+    # Pin vào taskbar nếu GNOME (Ubuntu)
     if command -v gsettings &>/dev/null; then
         if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
             gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
@@ -82,6 +88,13 @@ EOF3
         fi
     else
         echo "ℹ️ Không tìm thấy gsettings, không thể pin vào taskbar."
+    fi
+
+    # Pin vào taskbar nếu Lubuntu (LXQt)
+    if echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
+        echo "ℹ️ Lubuntu LXQt detected. Bạn có thể kéo shortcut vào panel thủ công."
+    else
+        echo "ℹ️ Môi trường khác, Nekobox đã được cài vào autostart."
     fi
 
     echo "✅ Chrome đã được cài, khóa update và tắt update nội bộ."
