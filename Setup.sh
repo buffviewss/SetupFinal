@@ -1,75 +1,85 @@
+
 #!/bin/bash
 
-# =========================
-# Setup Ubuntu/Lubuntu (Combined Script)
-# =========================
+# === Cài đặt Python venv và gdown ===
+if [[ ! -d "$HOME/gdown-venv" ]]; then
+    echo "📦 Đang tạo venv Python và cài gdown..."
+    python3 -m venv ~/gdown-venv
+fi
 
-set -e  # Dừng nếu có lệnh thất bại
+source ~/gdown-venv/bin/activate
 
-# 1. Cập nhật và nâng cấp hệ thống
-echo "🔄 Cập nhật các gói hệ thống..."
-sudo add-apt-repository universe -y || true
-sudo apt update && sudo apt upgrade -y
+# Cài gdown trong venv (đảm bảo luôn có)
+pip install --no-cache-dir gdown
 
-# 2. Cài đặt Google Chrome (tương thích Ubuntu/Lubuntu 24.04)
-echo "🌐 Cài đặt Google Chrome..."
-if ! command -v google-chrome &> /dev/null; then
-    echo "📦 Cài đặt Google Chrome từ Drive..."
-    CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
-    DOWNLOAD_DIR="$HOME/browser_temp"
-    mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
-    
-    # Tải Chrome từ Google Drive
-    echo "📥 Đang tải Chrome..."
-    gdown --folder "https://drive.google.com/drive/folders/$CHROME_DRIVE_ID" --no-cookies
+# === Cấu hình Google Drive Folder ID ===
+CHROME_DRIVE_ID="1tD0XPj-t5C7p9ByV3RLg-qcHaYYSXAj1"
+DOWNLOAD_DIR="$HOME/browser_temp"
+mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 
-    # Tìm và chọn file .deb để cài đặt
-    FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.deb")
-    echo "$FILE_LIST" | nl -s". "
-    read -p "👉 Nhập số thứ tự file muốn cài: " choice
-    FILE_SELECT=$(echo "$FILE_LIST" | sed -n "${choice}p")
+# === Chọn trình duyệt muốn cài ===
+echo "Chọn trình duyệt muốn cài: Chrome"
+DRIVE_ID="$CHROME_DRIVE_ID"
+BTYPE="chrome"
 
-    if [[ ! -f "$FILE_SELECT" ]]; then
-        echo "❌ Không tìm thấy file hợp lệ!"
-        exit 1
-    fi
+# === Tải toàn bộ folder từ Google Drive ===
+echo "📥 Đang tải toàn bộ folder $BTYPE từ Google Drive..."
+gdown --folder "https://drive.google.com/drive/folders/$DRIVE_ID" --no-cookies
 
-    echo "✅ Chọn file: $FILE_SELECT"
+# === Liệt kê file tải về ===
+echo "🔍 Danh sách file tải về:"
+FILE_LIST=$(find "$DOWNLOAD_DIR" -type f -name "*.deb")
 
-    # Gỡ bỏ Google Chrome cũ nếu có (gỡ sạch sẽ)
-    echo "🗑️ Gỡ bỏ bản Google Chrome cũ..."
-    sudo apt remove --purge -y google-chrome-stable || true
-    sudo apt remove --purge -y google-chrome || true
-    sudo rm -rf /opt/google/chrome
-    sudo rm -rf ~/.config/google-chrome
-    sudo rm -rf /etc/opt/chrome
-    sudo rm -rf /usr/share/applications/google-chrome.desktop
-    sudo rm -rf ~/.local/share/applications/google-chrome.desktop
+if [[ -z "$FILE_LIST" ]]; then
+    echo "❌ Không tìm thấy file hợp lệ!"
+    exit 1
+fi
 
-    # Cài đặt Chrome
-    echo "🚀 Đang cài đặt Chrome..."
-    sudo dpkg -i "$FILE_SELECT"
-    sudo apt -f install -y
-    sudo apt-mark hold google-chrome-stable
-    sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
+# Hiển thị danh sách để chọn
+echo "$FILE_LIST" | nl -s". "
+read -p "👉 Nhập số thứ tự file muốn cài: " choice
 
-    # Tắt cập nhật Chrome
-    echo "🚫 Tắt cập nhật Chrome..."
-    sudo rm -rf /opt/google/chrome/cron/
-    sudo mkdir -p /etc/opt/chrome/policies/managed
-    cat <<EOF > /tmp/disable_update.json
+FILE_SELECT=$(echo "$FILE_LIST" | sed -n "${choice}p")
+
+if [[ ! -f "$FILE_SELECT" ]]; then
+    echo "❌ File không tồn tại!"
+    exit 1
+fi
+
+echo "✅ Chọn file: $FILE_SELECT"
+
+# === Xóa file không được chọn để tiết kiệm dung lượng ===
+echo "🧹 Dọn dẹp file không dùng..."
+find "$DOWNLOAD_DIR" -type f ! -name "$(basename "$FILE_SELECT")" -delete
+
+# === Gỡ bản mặc định của Chrome ===
+echo "🗑️ Gỡ bản mặc định của Chrome..."
+sudo apt remove -y google-chrome-stable || true
+
+# === Cài đặt và khóa cập nhật Chrome ===
+echo "🚀 Đang cài Chrome..."
+sudo dpkg -i "$FILE_SELECT"
+sudo apt -f install -y
+sudo apt-mark hold google-chrome-stable
+sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
+
+# 🔒 Tắt update nội bộ của Chrome
+echo "🚫 Tắt update nội bộ Chrome..."
+sudo rm -rf /opt/google/chrome/cron/
+sudo mkdir -p /etc/opt/chrome/policies/managed
+cat <<EOF > /tmp/disable_update.json
 {
   "AutoUpdateCheckPeriodMinutes": 0,
   "DisableAutoUpdateChecksCheckbox": true,
   "MetricsReportingEnabled": false
 }
 EOF
-    sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
-    sudo chmod -R 000 /opt/google/chrome/cron || true
+sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
+sudo chmod -R 000 /opt/google/chrome/cron || true
 
-    # Tạo shortcut
-    echo "🎨 Tạo shortcut Google Chrome..."
-    cat <<EOF3 > ~/.local/share/applications/browser_custom.desktop
+# === Tạo shortcut cho Chrome ===
+echo "🎨 Tạo shortcut cho Chrome..."
+cat <<EOF3 > ~/.local/share/applications/browser_custom.desktop
 [Desktop Entry]
 Name=Google Chrome (Custom)
 Exec=/usr/bin/google-chrome-stable %U
@@ -79,61 +89,121 @@ Categories=Network;WebBrowser;
 StartupNotify=true
 EOF3
 
-    # Pin vào taskbar nếu GNOME (Ubuntu)
-    if command -v gsettings &>/dev/null; then
-        if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
-            gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
-        else
-            echo "ℹ️ Môi trường desktop không phải GNOME, không thể pin vào taskbar."
-        fi
-    else
-        echo "ℹ️ Không tìm thấy gsettings, không thể pin vào taskbar."
-    fi
-
-    # Pin vào taskbar nếu Lubuntu (LXQt)
-    if echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
-        echo "ℹ️ Lubuntu LXQt detected. Bạn có thể kéo shortcut vào panel thủ công."
-    else
-        echo "ℹ️ Môi trường khác, Nekobox đã được cài vào autostart."
-    fi
-
-    echo "✅ Chrome đã được cài, khóa update và tắt update nội bộ."
+# === Pin vào taskbar ===
+if command -v gsettings &>/dev/null; then
+    gio set ~/.local/share/applications/browser_custom.desktop metadata::trusted true 2>/dev/null
+    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'browser_custom.desktop']/")"
 else
-    echo "✅ Google Chrome đã được cài đặt sẵn."
+    echo "ℹ️ Trên Lubuntu (LXQt), hãy nhấp phải biểu tượng trong menu -> 'Pin to Panel'."
 fi
 
-# 3. Cài đặt các công cụ cần thiết
-echo "📦 Cài đặt công cụ cần thiết..."
-sudo apt install -y open-vm-tools open-vm-tools-desktop python3-pip unzip build-essential \
-libqt5network5 libqt5core5a libqt5gui5 libqt5widgets5 qtbase5-dev libqt5x11extras5 \
-libqt5quick5 libqt5quickwidgets5 libqt5quickparticles5
+echo "✅ Chrome đã được cài, khóa update và tắt update nội bộ."
 
-# 4. Thiết lập Virtual Environment và gdown
-echo "📦 Cài đặt gdown và thiết lập Python venv..."
-python3 -m venv ~/gdown-venv
-source ~/gdown-venv/bin/activate
-pip install --no-cache-dir gdown
+# === SỬA TẤT CẢ VẤN ĐỀ PASSWORD ===
 
-# 5. Cấu hình vấn đề password (auto-login, sudo không cần password)
-echo "🔧 Sửa tất cả vấn đề password..."
+echo "🔧 Đang sửa tất cả vấn đề password..."
+
+# 1. XÓA PASSWORD CỦA USER HIỆN TẠI
+echo "🔓 Xóa password user..."
 sudo passwd -d $USER
+
+# 2. CẤU HÌNH SUDO KHÔNG CẦN PASSWORD
+echo "⚡ Cấu hình sudo không cần password..."
 echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/$USER
-sudo tee /etc/lightdm/lightdm.conf.d/50-autologin.conf <<EOF
+
+# 3. CẤU HÌNH AUTO-LOGIN CHO LIGHTDM (LUBUNTU)
+echo "🚀 Cấu hình auto-login cho LightDM..."
+sudo mkdir -p /etc/lightdm/lightdm.conf.d
+sudo tee /etc/lightdm/lightdm.conf.d/50-autologin.conf << EOF
 [Seat:*]
 autologin-user=$USER
 autologin-user-timeout=0
 autologin-session=Lubuntu
 EOF
 
-# 6. Kiểm tra và cài đặt Nekobox
-echo "🔄 Kiểm tra và cài đặt Nekobox từ Google Drive..."
-FILE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"
-gdown --id "$FILE_ID" -O nekobox.zip
-unzip -o nekobox.zip -d ~/Downloads/nekoray
-chmod +x ~/Downloads/nekoray/launcher ~/Downloads/nekoray/nekobox
+# 4. CẤU HÌNH AUTO-LOGIN CHO GDM3 (UBUNTU)
+echo "🚀 Cấu hình auto-login cho GDM3..."
+sudo tee /etc/gdm3/custom.conf << EOF
+[daemon]
+AutomaticLoginEnable=true
+AutomaticLogin=$USER
 
-# 7. Tạo shortcut Desktop cho Nekobox
-echo "🖥️ Tạo shortcut Nekobox..."
+[security]
+
+[xdmcp]
+
+[chooser]
+
+[debug]
+EOF
+
+# 5. TẮT HOÀN TOÀN GNOME KEYRING
+echo "🔑 Tắt GNOME Keyring..."
+sudo apt remove --purge -y gnome-keyring seahorse 2>/dev/null || true
+sudo apt remove --purge -y kwalletmanager kwallet-kf5 2>/dev/null || true
+
+# 6. XÓA TẤT CẢ KEYRING DATA
+echo "🗑️ Xóa keyring data..."
+rm -rf ~/.local/share/keyrings 2>/dev/null || true
+rm -rf ~/.gnupg 2>/dev/null || true
+rm -rf ~/.config/kwalletrc 2>/dev/null || true
+
+# 7. TẮT PAM KEYRING
+echo "🔒 Tắt PAM keyring..."
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/login 2>/dev/null || true
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/passwd 2>/dev/null || true
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-password 2>/dev/null || true
+sudo sed -i 's/.*pam_gnome_keyring.so.*/#&/' /etc/pam.d/gdm-autologin 2>/dev/null || true
+
+# 8. TẮT POLICYKIT PASSWORD PROMPTS
+echo "🛡️ Tắt PolicyKit prompts..."
+sudo mkdir -p /etc/polkit-1/localauthority/50-local.d
+sudo tee /etc/polkit-1/localauthority/50-local.d/disable-passwords.pkla << EOF
+[Disable password prompts for $USER]
+Identity=unix-user:$USER
+Action=*
+ResultActive=yes
+ResultInactive=yes
+ResultAny=yes
+EOF
+
+# === Hoàn tất cài đặt ===
+echo "✅ Hoàn tất setup!"
+
+# === Phần Nekobox ===
+
+# 5. Prepare Nekobox folder
+echo "📂 Preparing Nekobox folder..."
+rm -rf ~/Downloads/nekoray
+mkdir -p ~/Downloads/nekoray
+
+# 6. Download Nekobox ZIP from Google Drive
+echo "⬇️ Downloading Nekobox from Google Drive..."
+cd ~/Downloads
+
+# ⚠️ Thay ID này bằng ID thực tế của file Nekobox trên Google Drive!
+FILE_ID="1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj"  
+gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Download failed! Check Google Drive file ID."; exit 1; }
+
+# 7. Extract Nekobox
+echo "📂 Extracting Nekobox..."
+unzip -o nekobox.zip -d ~/Downloads/nekoray
+
+# 8. Handle nested folders
+inner_dir=$(find ~/Downloads/nekoray -mindepth 1 -maxdepth 1 -type d | head -n 1)
+if [ "$inner_dir" != "" ] && [ "$inner_dir" != "$HOME/Downloads/nekoray" ]; then
+    echo "📂 Adjusting folder structure..."
+    mv "$inner_dir"/* ~/Downloads/nekoray/
+    rm -rf "$inner_dir"
+fi
+
+# 9. Grant execution permissions
+echo "🔑 Setting execution permissions..."
+cd ~/Downloads/nekoray
+chmod +x launcher nekobox nekobox_core || echo "⚠️ Some files not found, skipping chmod."
+
+# 10. Create desktop shortcut
+echo "🖥️ Creating desktop shortcut..."
 cat <<EOF > ~/Desktop/nekoray.desktop
 [Desktop Entry]
 Version=1.0
@@ -145,26 +215,31 @@ Terminal=false
 Type=Application
 Categories=Utility;
 EOF
+
 chmod +x ~/Desktop/nekoray.desktop
 
-# 8. Pin Nekobox vào taskbar và thêm vào autostart
-echo "📌 Pin Nekobox vào taskbar và thêm vào autostart..."
+echo "📌 Pinning Nekobox to taskbar and enabling autostart..."
+
+# Pin cho Ubuntu GNOME
+if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
+    echo "📌 Ubuntu GNOME detected - pinning Nekobox to taskbar..."
+    gsettings set org.gnome.shell favorite-apps     "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
+elif echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
+    echo "📌 Lubuntu LXQt detected - LXQt không hỗ trợ auto pin, bạn có thể kéo shortcut vào panel thủ công."
+else
+    echo "ℹ️ Unknown desktop environment: $XDG_CURRENT_DESKTOP - skipping auto pinning."
+fi
+
+# Autostart cho cả Ubuntu & Lubuntu
 mkdir -p ~/.config/autostart
 cp ~/Desktop/nekoray.desktop ~/.config/autostart/nekoray.desktop
 chmod +x ~/.config/autostart/nekoray.desktop
 
-# Tùy chỉnh theo môi trường Desktop
-if echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
-    echo "ℹ️ Lubuntu LXQt detected, pinning Nekobox manually on the panel."
-    echo "ℹ️ Bạn có thể kéo shortcut vào panel."
-else
-    echo "ℹ️ Môi trường khác, Nekobox đã được cài vào autostart."
-fi
+echo "✅ Nekobox pinned to taskbar (Ubuntu GNOME) and set to autostart."
 
-echo "✅ Nekobox đã được cài đặt thành công!"
+# 11. Launch Nekobox
+echo "🚀 Launching Nekobox..."
+./nekobox || echo "⚠️ Unable to launch Nekobox automatically. Start manually from ~/Downloads/nekoray."
 
-# 9. Kiểm tra lại các bước setup
-echo "🔍 Kiểm tra lại các bước setup..."
-python3 --version
-pip3 --version
-gdown --version
+echo "✅ Setup completed successfully!"
+
