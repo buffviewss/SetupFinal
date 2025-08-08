@@ -280,90 +280,94 @@ get_chrome_file_list() {
 }
 
 select_chrome_version() {
-    echo "=============================================="
-    echo "  🌐 CHROME VERSION SELECTION"
-    echo "=============================================="
-
-    echo ""
-    echo "Chọn chế độ cài đặt Chrome:"
-    echo ""
-    local mode_options=(
-        "Tải bản mới nhất từ Google (Khuyến nghị)"
-        "Chọn phiên bản từ Google Drive"
-    )
-
-    select mode in "${mode_options[@]}"; do
-        case $mode in
-            "Tải bản mới nhất từ Google (Khuyến nghị)")
-                log "🌐 User selected: Download Latest Chrome from official source"
-                echo "latest"
-                return 0
-                ;;
-            "Chọn phiên bản từ Google Drive")
-                log "📁 User selected: Choose version from Google Drive"
-                # Chuẩn bị môi trường Python/gdown chỉ khi cần dùng Google Drive
-                setup_python_env
-                break
-                ;;
-            *)
-                echo "❌ Lựa chọn không hợp lệ, vui lòng chọn 1 hoặc 2."
-                ;;
-        esac
-    done
-
-    # Chỉ khi chọn Google Drive mới tiến hành lấy danh sách phiên bản
-    log "🔍 Checking Google Drive for Chrome versions..."
-
-    local file_list
-    file_list=$(get_chrome_file_list)
-
-    if [[ -n "$file_list" ]]; then
-        log "✅ Successfully found Chrome files in Google Drive"
-        echo ""
-        echo "📁 Available Chrome versions in your Google Drive folder:"
-        echo ""
-
-        local options=()
-        local file_count=0
-        while IFS= read -r file; do
-            if [[ -n "$file" ]]; then
-                options+=("$file")
-                file_count=$((file_count + 1))
-                echo "   📦 $file"
-            fi
-        done <<< "$file_list"
+    # Save stdout to FD 3, then redirect all UI output (including select menus) to stderr
+    exec 3>&1
+    {
+        echo "=============================================="
+        echo "  🌐 CHROME VERSION SELECTION"
+        echo "=============================================="
 
         echo ""
-        echo "📊 Found $file_count Chrome versions in your Drive folder"
+        echo "Chọn chế độ cài đặt Chrome:"
         echo ""
-        echo "Choose Chrome version to install:"
-        echo ""
+        local mode_options=(
+            "Tải bản mới nhất từ Google (Khuyến nghị)"
+            "Chọn phiên bản từ Google Drive"
+        )
 
-        select version in "${options[@]}"; do
-            if [[ -n "$version" ]]; then
-                log "📦 User selected: $version"
-                echo "$version"
-                return 0
-            else
-                echo "❌ Lựa chọn không hợp lệ, vui lòng chọn số trong danh sách."
-            fi
+        select mode in "${mode_options[@]}"; do
+            case $mode in
+                "Tải bản mới nhất từ Google (Khuyến nghị)")
+                    log "🌐 User selected: Download Latest Chrome from official source"
+                    echo "latest" >&3
+                    return 0
+                    ;;
+                "Chọn phiên bản từ Google Drive")
+                    log "📁 User selected: Choose version from Google Drive"
+                    # Chuẩn bị môi trường Python/gdown chỉ khi cần dùng Google Drive
+                    setup_python_env
+                    break
+                    ;;
+                *)
+                    echo "❌ Lựa chọn không hợp lệ, vui lòng chọn 1 hoặc 2."
+                    ;;
+            esac
         done
-    else
-        # Không lấy được danh sách từ Drive
-        log "⚠️ Could not retrieve file list from Drive folder"
-        log "💡 This might be due to network issues or Drive permissions"
-        echo ""
-        echo "⚠️ Could not access files in Google Drive folder"
-        echo "📡 This might be due to:"
-        echo "   • Network connectivity issues"
-        echo "   • Google Drive folder permissions"
-        echo "   • Folder ID incorrect"
-        echo ""
-        echo "❌ Unable to list Google Drive folder. Aborting installation."
-        echo "Please check network, folder permissions, or CHROME_DRIVE_ID and try again."
-        log "❌ Aborting: Google Drive listing required for version selection"
-        exit 1
-    fi
+
+        # Chỉ khi chọn Google Drive mới tiến hành lấy danh sách phiên bản
+        log "🔍 Checking Google Drive for Chrome versions..."
+
+        local file_list
+        file_list=$(get_chrome_file_list)
+
+        if [[ -n "$file_list" ]]; then
+            log "✅ Successfully found Chrome files in Google Drive"
+            echo ""
+            echo "📁 Available Chrome versions in your Google Drive folder:"
+            echo ""
+
+            local options=()
+            local file_count=0
+            while IFS= read -r file; do
+                if [[ -n "$file" ]]; then
+                    options+=("$file")
+                    file_count=$((file_count + 1))
+                    echo "   📦 $file"
+                fi
+            done <<< "$file_list"
+
+            echo ""
+            echo "📊 Found $file_count Chrome versions in your Drive folder"
+            echo ""
+            echo "Choose Chrome version to install:"
+            echo ""
+
+            select version in "${options[@]}"; do
+                if [[ -n "$version" ]]; then
+                    log "📦 User selected: $version"
+                    echo "$version" >&3
+                    return 0
+                else
+                    echo "❌ Lựa chọn không hợp lệ, vui lòng chọn số trong danh sách."
+                fi
+            done
+        else
+            # Không lấy được danh sách từ Drive
+            log "⚠️ Could not retrieve file list from Drive folder"
+            log "💡 This might be due to network issues or Drive permissions"
+            echo ""
+            echo "⚠️ Could not access files in Google Drive folder"
+            echo "📡 This might be due to:"
+            echo "   • Network connectivity issues"
+            echo "   • Google Drive folder permissions"
+            echo "   • Folder ID incorrect"
+            echo ""
+            echo "❌ Unable to list Google Drive folder. Aborting installation."
+            echo "Please check network, folder permissions, or CHROME_DRIVE_ID and try again."
+            log "❌ Aborting: Google Drive listing required for version selection"
+            exit 1
+        fi
+    } 1>&2
 }
 
 # === CHROME DOWNLOAD & INSTALLATION ===
