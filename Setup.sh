@@ -1127,10 +1127,12 @@ install_full_setup() {
 
     # Step 2: Select and install Chrome
     log "🌐 Step 2/6: Installing Google Chrome..."
+
+    # Ensure Python/pip/gdown are ready BEFORE listing Drive
+    setup_python_env
+
     local version_choice
     version_choice=$(select_chrome_version)
-
-    setup_python_env
 
     local selected_file
     selected_file=$(download_specific_chrome_file "$version_choice")
