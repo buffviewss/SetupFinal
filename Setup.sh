@@ -1,8 +1,8 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v17
-# - Fix: use correct CLI `gdown --list` instead of `gdown list`
-# - Robust listing (URL/ID × with/without --no-cookies, CSV parsing)
-# - Keeps: force gdown>=5.2.0, single-file selection, LXQt pin, cleanup, etc.
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v18
+# - Uses `gdown --list` when available
+# - If not or listing empty, falls back to scraping embeddedfolderview HTML (public folders)
+# - Still forces single-file choice (no folder download)
 
 set -euo pipefail
 
@@ -22,30 +22,25 @@ purge_if_installed(){
 }
 
 ensure_gdown(){
-  need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip || true
+  need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip curl || true
   export PATH="$HOME/.local/bin:$PATH"
   local VENV="$HOME/gdown-venv"
 
   if [[ -d "$VENV" && -f "$VENV/bin/activate" ]]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
-    if ! (gdown --help | grep -q -- "--list"); then deactivate || true; rm -rf "$VENV"; fi
+    # don't assume --list exists; we just upgrade to latest
+    python -m pip install --no-cache-dir --upgrade pip
+    python -m pip install --no-cache-dir --upgrade "gdown>=5.2.0"
+    return 0
   elif [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
     rm -rf "$VENV"
   fi
 
-  [[ ! -f "$VENV/bin/activate" ]] && python3 -m venv "$VENV" || true
-  if [[ -f "$VENV/bin/activate" ]]; then
-    source "$VENV/bin/activate"
-    python -m pip install --no-cache-dir --upgrade pip
-    python -m pip install --no-cache-dir --upgrade "gdown>=5.2.0"
-    return 0
-  fi
-
-  python3 -m pip install --user --no-cache-dir --upgrade pip || true
-  python3 -m pip install --user --no-cache-dir --upgrade "gdown>=5.2.0"
-  export PATH="$HOME/.local/bin:$PATH"
-  is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
+  python3 -m venv "$VENV"
+  source "$VENV/bin/activate"
+  python -m pip install --no-cache-dir --upgrade pip
+  python -m pip install --no-cache-dir --upgrade "gdown>=5.2.0"
 }
 
 ensure_lxqt_quicklaunch_plugin(){
@@ -135,27 +130,44 @@ base_setup(){
   log "✅ Hoàn tất bước nền."
 }
 
-# Proper listing with `gdown --list`
+scrape_drive_folder(){
+  # Input: FOLDER_ID
+  # Output: print CSV: id,name  (only .deb files)
+  local fid="$1"
+  local html
+  html="$(curl -sL "https://drive.google.com/embeddedfolderview?id=${fid}#grid" || true)"
+  # Grep entries like: data-id="FILEID" ... data-target=... data-title="FILENAME"
+  # Some pages use aria-label instead of data-title; capture both.
+  echo "$html" | tr '\n' ' ' | \
+    grep -oE 'data-id="[-_0-9A-Za-z]+"' | sed 's/data-id="//; s/"$//' > /tmp/ids.txt || true
+  echo "$html" | tr '\n' ' ' | \
+    grep -oE 'data-title="[^"]+\.deb"|aria-label="[^"]+\.deb"' | \
+    sed 's/.*="\([^"]*\.deb\)".*/\1/' > /tmp/names.txt || true
+
+  # Pair them up line-by-line
+  paste -d, /tmp/ids.txt /tmp/names.txt 2>/dev/null | awk -F, 'NF==2{print $0}'
+}
+
 choose_chrome_file_from_drive(){
   local CHROME_DRIVE_ID="$1"
   local FOLDER_URL="https://drive.google.com/drive/folders/$CHROME_DRIVE_ID"
   local raw=""
   local tried=()
 
-  if (gdown --help | grep -q -- "--list"); then
-    log "📋 Lấy danh sách file trong thư mục Drive (không tải xuống)..."
-    # 1) URL + csv + no-cookies
-    raw="$(gdown --list "$FOLDER_URL" --format csv --no-cookies 2>/dev/null || true)"; tried+=("url+csv+nocookies")
-    # 2) bare ID + csv + no-cookies
-    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" --format csv --no-cookies 2>/dev/null || true)"; tried+=("id+csv+nocookies")
-    # 3) URL + csv
-    [[ -z "$raw" ]] && raw="$(gdown --list "$FOLDER_URL" --format csv 2>/dev/null || true)"; tried+=("url+csv")
-    # 4) bare ID + csv
-    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" --format csv 2>/dev/null || true)"; tried+=("id+csv")
-    # 5) URL plain
-    [[ -z "$raw" ]] && raw="$(gdown --list "$FOLDER_URL" 2>/dev/null || true)"; tried+=("url+plain")
-    # 6) ID plain
-    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" 2>/dev/null || true)"; tried+=("id+plain")
+  # Try gdown listing if supported in this build (some builds have no --list)
+  if gdown --help 2>/dev/null | grep -q -- "--list"; then
+    log "📋 Lấy danh sách file trong thư mục Drive (gdown, không tải xuống)..."
+    raw="$(gdown --list "$FOLDER_URL" --format csv --no-cookies 2>/dev/null || true)"; tried+=("gdown:url+csv+nocookies")
+    [[ -z "$raw" ]] && raw="$(gdown --list "$CHROME_DRIVE_ID" --format csv 2>/dev/null || true)"; tried+=("gdown:id+csv")
+  else
+    tried+=("gdown:unsupported")
+  fi
+
+  # Fallback: scrape embedded HTML (public folders only)
+  if [[ -z "$raw" ]]; then
+    log "🔎 Thử cách 2 (scrape HTML embeddedfolderview)..."
+    raw="$(scrape_drive_folder "$CHROME_DRIVE_ID" | sed '1i id,name')"
+    [[ -n "$raw" ]] && tried+=("scrape:embeddedfolderview")
   fi
 
   if [[ -z "$raw" ]]; then
@@ -172,14 +184,13 @@ choose_chrome_file_from_drive(){
     return 0
   fi
 
-  # If CSV format
-  if echo "$raw" | head -n1 | grep -q 'id,name,size'; then
-    mapfile -t ids < <(echo "$raw" | awk -F, 'NR>1 && /\.deb($|")/ {print $1}')
-    mapfile -t names < <(echo "$raw" | awk -F, 'NR>1 && /\.deb($|")/ {print $2}')
+  if echo "$raw" | head -n1 | grep -q 'id,name'; then
+    mapfile -t ids < <(echo "$raw" | awk -F, 'NR>1 {print $1}')
+    mapfile -t names < <(echo "$raw" | awk -F, 'NR>1 {print $2}')
     if (( ${#ids[@]} == 0 )); then
       echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
     fi
-    echo "Các bản Chrome có sẵn:"
+    echo "Các bản Chrome có sẵn (từ ${tried[-1]}):"
     for i in "${!ids[@]}"; do printf "  %2d) %s\n" $((i+1)) "${names[$i]}"; done
     read -rp "👉 Chọn số thứ tự gói cần tải & cài: " choice
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice<1 || choice>${#ids[@]} )); then
@@ -190,29 +201,7 @@ choose_chrome_file_from_drive(){
     return 0
   fi
 
-  # Plain text parse (fallback)
-  mapfile -t rows < <(echo "$raw" | awk '/\.deb([[:space:]]|$)/ {print}')
-  if (( ${#rows[@]} == 0 )); then
-    echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
-  fi
-  echo "Các bản Chrome có sẵn:"
-  declare -a IDS NAMES
-  local idx=1
-  for line in "${rows[@]}"; do
-    local id name
-    id="$(echo "$line" | awk '{print $1}')"
-    name="$(echo "$line" | sed -E 's/^[^ ]+ //; s/ [0-9.]+([KMG]i?B)?$//')"
-    IDS[$idx]="$id"; NAMES[$idx]="$name"
-    printf "  %2d) %s\n" "$idx" "$name"
-    idx=$((idx+1))
-  done
-  read -rp "👉 Chọn số thứ tự gói cần tải & cài: " choice
-  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice<1 || choice>=idx )); then
-    echo "❌ Lựa chọn không hợp lệ."; exit 1
-  fi
-  CHOSEN_ID="${IDS[$choice]}"
-  CHOSEN_NAME="${NAMES[$choice]}"
-  return 0
+  echo "❌ Định dạng danh sách không nhận dạng được."; exit 1
 }
 
 install_chrome_from_drive(){
@@ -371,7 +360,7 @@ EOF
 }
 
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v17, uses gdown --list) ====="
+  log "===== AIO Setup 24.04 (Auto-run v18, HTML scrape fallback) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
