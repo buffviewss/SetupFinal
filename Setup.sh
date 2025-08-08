@@ -367,24 +367,12 @@ EOF
   echo "   ✅ Chrome/Firefox mở không hỏi master password"
 }
 
-# --- Menu (optional) ---
-show_menu() {
-  echo "Chọn tác vụ:"
-  select opt in "Cài Chrome" "Cài Nekobox" "Hậu kiểm (post-checks)" "No-password (NGUY HIỂM)" "Thoát"; do
-    case $opt in
-      "Cài Chrome") install_chrome_from_drive; break;;
-      "Cài Nekobox") setup_nekobox; break;;
-      "Hậu kiểm (post-checks)") post_checks; break;;
-      "No-password (NGUY HIỂM)") danger_no_password_all; break;;
-      "Thoát") echo "🚪 Thoát."; break;;
-      *) echo "❌ Lựa chọn không hợp lệ!";;
-    esac
-  done
-}
-
-# --- CLI ---
+# --- Default behavior: auto run (first-boot friendly) ---
+# No menu. User will only be asked to choose the Chrome .deb version.
 if [[ $# -eq 0 ]]; then
-  show_menu
+  install_chrome_from_drive
+  setup_nekobox
+  post_checks
   exit 0
 fi
 
