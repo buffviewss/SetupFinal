@@ -278,58 +278,9 @@ EOF
   log "✅ Xong phần password & autologin."
 }
 
-# ===== 4) Nekobox =====
-install_nekobox() {
-  ensure_gdown
-  log "📂 Chuẩn bị Nekobox..."
-  rm -rf "$HOME/Downloads/nekoray"
-  mkdir -p "$HOME/Downloads/nekoray"
-  cd "$HOME/Downloads"
-  local FILE_ID="${NEKOBOX_FILE_ID:-1ZnubkMQL06AWZoqaHzRHtJTEtBXZ8Pdj}"
-  gdown --id "$FILE_ID" -O nekobox.zip || { echo "❌ Tải thất bại."; return 1; }
-  unzip -o nekobox.zip -d "$HOME/Downloads/nekoray"
-  local inner_dir
-  inner_dir=$(find "$HOME/Downloads/nekoray" -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
-  if [[ -n "${inner_dir:-}" && "$inner_dir" != "$HOME/Downloads/nekoray" ]]; then
-    mv "$inner_dir"/* "$HOME/Downloads/nekoray/" || true
-    rm -rf "$inner_dir"
-  fi
-  cd "$HOME/Downloads/nekoray"
-  chmod +x launcher nekobox nekobox_core 2>/dev/null || true
-
-  cat <<EOF > "$HOME/Desktop/nekoray.desktop"
-[Desktop Entry]
-Version=1.0
-Name=Nekobox
-Comment=Open Nekobox
-Exec=$HOME/Downloads/nekoray/nekobox
-Icon=$HOME/Downloads/nekoray/nekobox.png
-Terminal=false
-Type=Application
-Categories=Utility;
-EOF
-  chmod +x "$HOME/Desktop/nekoray.desktop"
-  mkdir -p "$HOME/.local/share/applications"
-  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.local/share/applications/nekoray.desktop"
-
-  mkdir -p "$HOME/.config/autostart"
-  cp "$HOME/Desktop/nekoray.desktop" "$HOME/.config/autostart/nekoray.desktop"
-  chmod +x "$HOME/.config/autostart/nekoray.desktop"
-
-  if is_gnome; then
-    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
-  fi
-  if is_lxqt; then
-    pin_lxqt_quicklaunch "$HOME/.local/share/applications/nekoray.desktop"
-  fi
-  ./nekobox || echo "ℹ️ Không tự chạy được — mở thủ công từ $HOME/Downloads/nekoray/nekobox."
-  log "✅ Nekobox đã cài."
-}
-
 # ===== Auto-run =====
 main() {
-  log "===== AIO Setup 24.04 (Auto-run v10, Clean Uninstall Chrome) ====="
-  clean_uninstall_chrome
+  log "===== AIO Setup 24.04 (Auto-run v8) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
@@ -340,4 +291,5 @@ main() {
   log "🧹 Đã dọn gói thừa (autoremove + clean)."
   log "🎉 Hoàn tất. Khuyến nghị reboot."
 }
+
 main
