@@ -1,8 +1,8 @@
 #!/bin/bash
-# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v12
-# - Based on v11 (APT pin, LXQt pin, quiet logs, autoremove)
-# - NEW: Force choose ONE Chrome .deb before download (no folder fallback).
-#        If `gdown list` unsupported, you MUST paste a FILE_ID.
+# All-in-one setup for Ubuntu/Lubuntu 24.04 (AUTO-RUN) — v13
+# - Based on v12
+# - Force install gdown>=5.2.0 and verify `gdown list` availability
+# - If an old venv exists without `list`, recreate it automatically
 
 set -euo pipefail
 
@@ -22,22 +22,41 @@ purge_if_installed(){
   done
 }
 
-# ===== gdown installer =====
+# ===== gdown installer (force >=5.2.0) =====
 ensure_gdown(){
   need_sudo; sudo apt update -y || true; sudo apt install -y python3-venv python3-pip || true
+
   export PATH="$HOME/.local/bin:$PATH"
   local VENV="$HOME/gdown-venv"
-  [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]] && rm -rf "$VENV"
+
+  # If venv exists but `gdown list` not available, wipe and recreate
+  if [[ -d "$VENV" && -f "$VENV/bin/activate" ]]; then
+    # shellcheck disable=SC1091
+    source "$VENV/bin/activate"
+    if ! gdown --help 2>&1 | grep -q -E ' list( |$)'; then
+      deactivate || true
+      rm -rf "$VENV"
+    fi
+  elif [[ -d "$VENV" && ! -f "$VENV/bin/activate" ]]; then
+    rm -rf "$VENV"
+  fi
+
   [[ ! -f "$VENV/bin/activate" ]] && python3 -m venv "$VENV" || true
   if [[ -f "$VENV/bin/activate" ]]; then
     # shellcheck disable=SC1091
     source "$VENV/bin/activate"
     python -m pip install --no-cache-dir --upgrade pip
-    python -m pip install --no-cache-dir --upgrade gdown
+    python -m pip install --no-cache-dir --upgrade "gdown>=5.2.0"
+    # Final verification
+    if ! gdown --help 2>&1 | grep -q -E ' list( |$)'; then
+      echo "⚠️ Không tìm thấy subcommand 'list' dù đã nâng cấp gdown. Sẽ yêu cầu bạn nhập FILE_ID."
+    fi
     return 0
   fi
+
+  # Fallback to user install (still force >=5.2.0)
   python3 -m pip install --user --no-cache-dir --upgrade pip || true
-  python3 -m pip install --user --no-cache-dir --upgrade gdown
+  python3 -m pip install --user --no-cache-dir --upgrade "gdown>=5.2.0"
   export PATH="$HOME/.local/bin:$PATH"
   is_cmd gdown || { echo "❌ Không thể cài gdown."; exit 1; }
 }
@@ -144,7 +163,7 @@ choose_chrome_file_from_drive(){
   fi
 
   if [[ -z "$raw" ]]; then
-    echo "⚠️ gdown trên máy chưa hỗ trợ 'list'."
+    echo "⚠️ gdown không hỗ trợ 'list' trên máy này."
     echo "👉 Dán FILE_ID của gói .deb bạn muốn cài (bắt buộc, sẽ không tải cả thư mục):"
     read -rp "FILE_ID: " MANUAL_ID
     if [[ -z "${MANUAL_ID:-}" ]]; then
@@ -156,7 +175,6 @@ choose_chrome_file_from_drive(){
     return 0
   fi
 
-  # Parse .deb lines → build arrays of IDs and names
   mapfile -t rows < <(echo "$raw" | awk '/\.deb([[:space:]]|$)/ {print}')
   if (( ${#rows[@]} == 0 )); then
     echo "❌ Không tìm thấy file .deb trong thư mục."; exit 1
@@ -213,8 +231,7 @@ install_chrome_from_drive(){
   cat <<'JSON' >/tmp/disable_update.json
 {
   "AutoUpdateCheckPeriodMinutes": 0,
-  "DisableAutoUpdateChecksCheckbox": true,
-  "MetricsReportingEnabled": false
+  "DisableAutoUpdateChecksCheckbox": true
 }
 JSON
   sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
@@ -241,7 +258,7 @@ EOF
   if is_lxqt; then
     pin_lxqt_quicklaunch "$HOME/.local/share/applications/browser_custom.desktop"
   fi
-  log "✅ Chrome đã cài & khóa update (hold + repo off + policy + APT pin)."
+  log "✅ Chrome đã cài & khóa update."
 }
 
 # ===== 3) Password & autologin =====
@@ -343,7 +360,7 @@ EOF
 
 # ===== Auto-run =====
 main(){
-  log "===== AIO Setup 24.04 (Auto-run v12, force single-file Chrome) ====="
+  log "===== AIO Setup 24.04 (Auto-run v13, gdown>=5.2.0) ====="
   base_setup
   install_chrome_from_drive
   fix_passwords
