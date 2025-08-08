@@ -347,17 +347,10 @@ select_chrome_version() {
         echo "   • Google Drive folder permissions"
         echo "   • Folder ID incorrect"
         echo ""
-        echo "🌐 Will download latest Chrome from official Google source"
-        echo ""
-        read -p "Continue with latest Chrome? (y/n): " -r
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            log "🌐 User chose to continue with latest Chrome"
-            echo "latest"
-            return 0
-        else
-            log "❌ User cancelled installation"
-            exit 1
-        fi
+        echo "❌ Unable to list Google Drive folder. Aborting installation."
+        echo "Please check network, folder permissions, or CHROME_DRIVE_ID and try again."
+        log "❌ Aborting: Google Drive listing required for version selection"
+        exit 1
     fi
 }
 
@@ -431,17 +424,9 @@ download_specific_chrome_file() {
         log "❌ Failed to download from Google Drive (timeout or network error)"
     fi
 
-    # Fallback to latest version
-    log "🔄 Falling back to latest Chrome version..."
-    local fallback_file
-    fallback_file=$(download_latest_chrome)
-    if [[ $? -eq 0 && -n "$fallback_file" ]]; then
-        echo "$fallback_file"
-        return 0
-    else
-        log "❌ All download methods failed"
-        return 1
-    fi
+    # Do not fallback to latest; require Drive file when selected
+    log "❌ Drive download failed and fallback is disabled. Aborting."
+    return 1
 }
 
 # === CHROME REMOVAL ===
@@ -1135,11 +1120,6 @@ install_full_setup() {
     echo "🖥️ Desktop: $DESKTOP_ENV | 🐧 Version: $UBUNTU_VERSION"
     echo ""
 
-    read -p "🔥 Continue with full installation? (y/n): " -r
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        log "❌ Installation cancelled by user"
-        exit 0
-    fi
 
     # Step 1: Remove existing Chrome
     log "🧹 Step 1/6: Removing existing Chrome installations..."
