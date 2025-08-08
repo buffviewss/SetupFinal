@@ -21,6 +21,11 @@ echo ""
 
 echo "🌐 === PHẦN 1: CÀI ĐẶT CHROME CŨ ==="
 
+# Cài đặt python3-venv trước khi tạo virtual environment
+echo "📦 Cài đặt python3-venv..."
+sudo apt update
+sudo apt install -y python3-venv python3-pip
+
 # Tự cài Python venv và gdown
 if [[ ! -d "$HOME/gdown-venv" ]]; then
     echo "📦 Đang tạo venv Python và cài gdown..."
