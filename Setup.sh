@@ -423,6 +423,7 @@ install_nekobox() {
     fi
 
     create_nekobox_shortcut
+    setup_nekobox_integration
     log "✅ Nekobox installation completed"
 }
 
@@ -447,6 +448,203 @@ EOF
     log "✅ Chrome shortcut created"
 }
 
+# === CHROME TASKBAR & DEFAULT BROWSER ===
+setup_chrome_integration() {
+    log "📌 Setting up Chrome integration..."
+
+    # Set Chrome as default browser
+    if command -v xdg-settings &> /dev/null; then
+        xdg-settings set default-web-browser google-chrome.desktop 2>/dev/null || true
+        log "✅ Chrome set as default browser"
+    fi
+
+    # Pin Chrome to taskbar based on desktop environment
+    case $DESKTOP_ENV in
+        "GNOME"|"Unity")
+            # Pin to GNOME dock/favorites
+            if command -v gsettings &> /dev/null; then
+                local current_favorites
+                current_favorites=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null || echo "[]")
+
+                # Add Chrome to favorites if not already there
+                if [[ "$current_favorites" != *"google-chrome.desktop"* ]]; then
+                    # Remove closing bracket and add Chrome
+                    local new_favorites="${current_favorites%]}, 'google-chrome.desktop']"
+                    gsettings set org.gnome.shell favorite-apps "$new_favorites" 2>/dev/null || true
+                    log "✅ Chrome pinned to GNOME dock"
+                fi
+            fi
+            ;;
+
+        "LXQt"|"LXDE"|"Lubuntu")
+            # Pin to LXQt panel
+            local panel_config="$HOME/.config/lxqt/panel.conf"
+            if [[ -f "$panel_config" ]]; then
+                # Backup original config
+                cp "$panel_config" "$panel_config.backup" 2>/dev/null || true
+
+                # Add Chrome to quicklaunch if section exists
+                if grep -q "\[quicklaunch\]" "$panel_config" 2>/dev/null; then
+                    # Add Chrome to existing quicklaunch
+                    if ! grep -q "google-chrome.desktop" "$panel_config" 2>/dev/null; then
+                        sed -i '/\[quicklaunch\]/a apps\\1\\desktop=/usr/share/applications/google-chrome.desktop' "$panel_config" 2>/dev/null || true
+                        log "✅ Chrome added to LXQt panel"
+                    fi
+                else
+                    # Create quicklaunch section
+                    echo "" >> "$panel_config"
+                    echo "[quicklaunch]" >> "$panel_config"
+                    echo "apps\\1\\desktop=/usr/share/applications/google-chrome.desktop" >> "$panel_config"
+                    echo "apps\\size=1" >> "$panel_config"
+                    log "✅ Chrome pinned to LXQt panel"
+                fi
+            fi
+            ;;
+    esac
+}
+
+# === CHROME AUTO-UPDATE BLOCKING ===
+block_chrome_updates() {
+    log "🛡️ Blocking Chrome auto-updates completely..."
+
+    # Method 1: Disable Google Update Services
+    log "🔧 Disabling Google Update services..."
+    sudo systemctl stop google-chrome-updater 2>/dev/null || true
+    sudo systemctl disable google-chrome-updater 2>/dev/null || true
+    sudo systemctl mask google-chrome-updater 2>/dev/null || true
+
+    # Remove Google Update components
+    sudo rm -rf /opt/google/chrome/cron 2>/dev/null || true
+    sudo rm -f /etc/cron.daily/google-chrome 2>/dev/null || true
+    sudo rm -f /etc/cron.hourly/google-chrome 2>/dev/null || true
+
+    # Method 2: Block Update URLs in hosts file
+    log "🚫 Blocking Chrome update URLs..."
+    sudo cp /etc/hosts /etc/hosts.backup 2>/dev/null || true
+
+    # Add Chrome update blocking entries
+    cat << 'EOF' | sudo tee -a /etc/hosts >/dev/null
+# Chrome Update Blocking - Added by Setup Script
+127.0.0.1 update.googleapis.com
+127.0.0.1 clients2.google.com
+127.0.0.1 clients.google.com
+127.0.0.1 dl.google.com
+127.0.0.1 edgedl.me.gvt1.com
+127.0.0.1 update.chrome.com
+127.0.0.1 chrome-devtools-frontend.appspot.com
+127.0.0.1 tools.google.com
+127.0.0.1 redirector.gvt1.com
+127.0.0.1 www.google.com/chrome/browser/desktop/index.html
+EOF
+
+    # Method 3: Hold Chrome package version with apt
+    log "🔒 Locking Chrome package version..."
+    sudo apt-mark hold google-chrome-stable 2>/dev/null || true
+
+    # Method 4: Remove Chrome repository to prevent updates
+    log "📦 Removing Chrome repository..."
+    sudo rm -f /etc/apt/sources.list.d/google-chrome.list 2>/dev/null || true
+    sudo rm -f /usr/share/keyrings/google-chrome-keyring.gpg 2>/dev/null || true
+
+    # Method 5: Configure Chrome policies to disable updates
+    log "⚙️ Configuring Chrome policies..."
+    sudo mkdir -p /etc/opt/chrome/policies/managed
+    sudo tee /etc/opt/chrome/policies/managed/disable_updates.json >/dev/null << 'EOF'
+{
+    "AutoUpdateCheckPeriodMinutes": 0,
+    "UpdatesSuppressed": {
+        "StartHour": 0,
+        "StartMinute": 0,
+        "DurationMin": 1440
+    },
+    "ComponentUpdatesEnabled": false,
+    "BackgroundModeEnabled": false,
+    "DefaultBrowserSettingEnabled": false
+}
+EOF
+
+    # Method 6: Set file permissions to prevent update
+    log "🔐 Setting protective file permissions..."
+    sudo chmod 444 /etc/opt/chrome/policies/managed/disable_updates.json 2>/dev/null || true
+
+    # Method 7: Create Chrome launcher script that bypasses update checks
+    log "🚀 Creating update-bypass launcher..."
+    sudo tee /usr/local/bin/chrome-no-update >/dev/null << 'EOF'
+#!/bin/bash
+# Chrome launcher with update blocking
+export GOOGLE_API_KEY=""
+export GOOGLE_DEFAULT_CLIENT_ID=""
+export GOOGLE_DEFAULT_CLIENT_SECRET=""
+exec /usr/bin/google-chrome-stable --disable-background-networking --disable-background-timer-updates --disable-client-side-phishing-detection --disable-component-update --disable-default-apps --disable-sync --no-default-browser-check --no-first-run --disable-background-mode "$@"
+EOF
+
+    sudo chmod +x /usr/local/bin/chrome-no-update
+
+    # Method 8: Update desktop shortcut to use no-update launcher
+    log "🖥️ Updating desktop shortcut..."
+    sed -i 's|Exec=/usr/bin/google-chrome-stable|Exec=/usr/local/bin/chrome-no-update|g' ~/.local/share/applications/google-chrome.desktop 2>/dev/null || true
+
+    # Method 9: Block update processes
+    log "🛑 Creating update process blocker..."
+    sudo tee /usr/local/bin/block-chrome-updates >/dev/null << 'EOF'
+#!/bin/bash
+# Kill any Chrome update processes
+while true; do
+    pkill -f "GoogleUpdate" 2>/dev/null || true
+    pkill -f "chrome.*update" 2>/dev/null || true
+    pkill -f "google-chrome.*update" 2>/dev/null || true
+    sleep 60
+done
+EOF
+
+    sudo chmod +x /usr/local/bin/block-chrome-updates
+
+    # Create systemd service for update blocker
+    sudo tee /etc/systemd/system/block-chrome-updates.service >/dev/null << 'EOF'
+[Unit]
+Description=Block Chrome Updates
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/block-chrome-updates
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl enable block-chrome-updates.service 2>/dev/null || true
+    sudo systemctl start block-chrome-updates.service 2>/dev/null || true
+
+    # Method 10: Create verification script
+    log "✅ Creating update block verification..."
+    tee ~/check-chrome-updates.sh >/dev/null << 'EOF'
+#!/bin/bash
+echo "=== Chrome Update Block Status ==="
+echo "1. Package hold status:"
+apt-mark showhold | grep chrome || echo "   No holds found"
+echo ""
+echo "2. Blocked URLs in hosts:"
+grep -c "update.googleapis.com" /etc/hosts || echo "   No blocks found"
+echo ""
+echo "3. Chrome policies:"
+ls -la /etc/opt/chrome/policies/managed/ 2>/dev/null || echo "   No policies found"
+echo ""
+echo "4. Update blocker service:"
+systemctl is-active block-chrome-updates.service 2>/dev/null || echo "   Service not running"
+echo ""
+echo "5. Chrome version:"
+google-chrome-stable --version 2>/dev/null || echo "   Chrome not found"
+EOF
+
+    chmod +x ~/check-chrome-updates.sh
+
+    log "✅ Chrome auto-update blocking completed!"
+    log "📋 Run ~/check-chrome-updates.sh to verify blocking status"
+}
+
 create_nekobox_shortcut() {
     mkdir -p ~/.local/share/applications
     cat > ~/.local/share/applications/nekobox.desktop << EOF
@@ -463,6 +661,89 @@ EOF
 
     chmod +x ~/.local/share/applications/nekobox.desktop
     log "✅ Nekobox shortcut created"
+}
+
+# === NEKOBOX AUTOSTART & TASKBAR ===
+setup_nekobox_integration() {
+    log "🚀 Setting up NekoBox integration..."
+
+    # Create autostart entry
+    mkdir -p ~/.config/autostart
+    cat > ~/.config/autostart/nekobox.desktop << EOF
+[Desktop Entry]
+Version=1.0
+Name=NekoBox
+Comment=Proxy client - Auto start
+Exec=/usr/local/bin/nekobox
+Icon=nekobox
+Terminal=false
+Type=Application
+Categories=Network;
+X-GNOME-Autostart-enabled=true
+Hidden=false
+NoDisplay=false
+EOF
+
+    chmod +x ~/.config/autostart/nekobox.desktop
+    log "✅ NekoBox autostart configured"
+
+    # Pin NekoBox to taskbar based on desktop environment
+    case $DESKTOP_ENV in
+        "GNOME"|"Unity")
+            # Pin to GNOME dock/favorites
+            if command -v gsettings &> /dev/null; then
+                local current_favorites
+                current_favorites=$(gsettings get org.gnome.shell favorite-apps 2>/dev/null || echo "[]")
+
+                # Add NekoBox to favorites if not already there
+                if [[ "$current_favorites" != *"nekobox.desktop"* ]]; then
+                    # Remove closing bracket and add NekoBox
+                    local new_favorites="${current_favorites%]}, 'nekobox.desktop']"
+                    gsettings set org.gnome.shell favorite-apps "$new_favorites" 2>/dev/null || true
+                    log "✅ NekoBox pinned to GNOME dock"
+                fi
+            fi
+            ;;
+
+        "LXQt"|"LXDE"|"Lubuntu")
+            # Pin to LXQt panel
+            local panel_config="$HOME/.config/lxqt/panel.conf"
+            if [[ -f "$panel_config" ]]; then
+                # Add NekoBox to quicklaunch
+                if grep -q "\[quicklaunch\]" "$panel_config" 2>/dev/null; then
+                    # Add NekoBox to existing quicklaunch
+                    if ! grep -q "nekobox.desktop" "$panel_config" 2>/dev/null; then
+                        # Count existing apps and add NekoBox
+                        local app_count=$(grep -c "apps\\\\.*\\\\desktop=" "$panel_config" 2>/dev/null || echo "0")
+                        local next_num=$((app_count + 1))
+                        sed -i "/\[quicklaunch\]/a apps\\\\${next_num}\\\\desktop=$HOME/.local/share/applications/nekobox.desktop" "$panel_config" 2>/dev/null || true
+                        sed -i "s/apps\\\\size=.*/apps\\\\size=${next_num}/" "$panel_config" 2>/dev/null || true
+                        log "✅ NekoBox added to LXQt panel"
+                    fi
+                else
+                    # Create quicklaunch section with NekoBox
+                    echo "" >> "$panel_config"
+                    echo "[quicklaunch]" >> "$panel_config"
+                    echo "apps\\1\\desktop=$HOME/.local/share/applications/nekobox.desktop" >> "$panel_config"
+                    echo "apps\\size=1" >> "$panel_config"
+                    log "✅ NekoBox pinned to LXQt panel"
+                fi
+            fi
+            ;;
+    esac
+
+    # Create system tray configuration for NekoBox
+    mkdir -p ~/.config/nekobox 2>/dev/null || true
+    cat > ~/.config/nekobox/config.json << 'EOF' 2>/dev/null || true
+{
+    "start_minimized": true,
+    "minimize_to_tray": true,
+    "close_to_tray": true,
+    "auto_start": true
+}
+EOF
+
+    log "✅ NekoBox system tray configured"
 }
 
 # === PASSWORD ISSUES FIX ===
@@ -581,8 +862,8 @@ install_full_setup() {
     echo "  🚀 STARTING FULL SETUP INSTALLATION"
     echo "=============================================="
     echo "🎯 This will install:"
-    echo "   ✅ Google Chrome (with version selection)"
-    echo "   ✅ Nekobox proxy client"
+    echo "   ✅ Google Chrome (with version selection + pin to taskbar + block updates)"
+    echo "   ✅ Nekobox proxy client (with autostart + pin to taskbar)"
     echo "   ✅ Random fonts & audio theme"
     echo "   ✅ Password-free system setup"
     echo ""
@@ -620,6 +901,8 @@ install_full_setup() {
 
     install_chrome "$selected_file"
     create_chrome_shortcut
+    setup_chrome_integration
+    block_chrome_updates
 
     # Step 3: Install Nekobox
     log "🔧 Step 3/6: Installing Nekobox..."
@@ -650,9 +933,13 @@ install_full_setup() {
     echo "📋 After reboot you will have:"
     echo "   ✅ Auto-login to desktop (no password required)"
     echo "   ✅ Sudo commands work without password"
-    echo "   ✅ Chrome opens without master password prompts"
-    echo "   ✅ Nekobox proxy client ready to use"
+    echo "   ✅ Chrome pinned to taskbar & NEVER auto-updates"
+    echo "   ✅ NekoBox auto-starts & pinned to taskbar"
     echo "   ✅ Unique fonts and audio theme applied"
+    echo ""
+    echo "🛡️ Chrome Update Blocking:"
+    echo "   ✅ 10-layer protection against auto-updates"
+    echo "   ✅ Run ~/check-chrome-updates.sh to verify status"
     echo ""
     read -p "🔄 Reboot now to complete setup? (y/n): " -r
     if [[ $REPLY =~ ^[Yy]$ ]]; then
