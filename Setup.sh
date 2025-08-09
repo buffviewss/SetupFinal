@@ -3,6 +3,17 @@
 # ============================
 # Cài đặt Python venv và gdown
 # ============================
+# Đảm bảo có python3-venv và pip
+if ! dpkg -s python3-venv >/dev/null 2>&1; then
+    echo "📦 Cài đặt python3-venv..."
+    sudo apt update
+    sudo apt install -y python3-venv
+fi
+
+if ! dpkg -s python3-pip >/dev/null 2>&1; then
+    echo "📦 Cài đặt python3-pip..."
+    sudo apt install -y python3-pip
+fi
 
 if [[ ! -d "$HOME/gdown-venv" ]]; then
     echo "📦 Đang tạo venv Python và cài gdown..."
@@ -24,14 +35,10 @@ mkdir -p "$DOWNLOAD_DIR" && cd "$DOWNLOAD_DIR"
 # Chọn trình duyệt Chrome
 # ============================
 
-echo "Chọn trình duyệt muốn cài:"
-select browser in "Chrome" "Thoát"; do
-    case $browser in
-        Chrome) DRIVE_ID="$CHROME_DRIVE_ID"; BTYPE="chrome"; break;;
-        Thoát) echo "🚪 Thoát script."; exit 0;;
-        *) echo "❌ Lựa chọn không hợp lệ!";;
-    esac
-done
+echo "🔹 Đang chọn Chrome làm trình duyệt cần cài..."
+DRIVE_ID="$CHROME_DRIVE_ID"
+BTYPE="chrome"
+
 
 # ============================
 # Tải toàn bộ folder từ Google Drive
