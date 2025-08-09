@@ -73,6 +73,20 @@ echo "✅ Chọn file: $FILE_SELECT"
 # === Cài đặt và khóa cập nhật ===
 if [[ $BTYPE == "chrome" ]]; then
     echo "🚀 Đang cài Chrome..."
+    
+        echo "🗑 Gỡ hoàn toàn Chrome cũ..."
+    # Gỡ gói Chrome nếu đang cài
+    sudo apt purge -y google-chrome-stable || true
+
+    # Xóa thư mục cài đặt và dữ liệu cấu hình
+    sudo rm -rf /etc/opt/chrome \
+                /opt/google/chrome \
+                /usr/bin/google-chrome \
+                ~/.config/google-chrome \
+                ~/.cache/google-chrome
+
+    echo "✅ Chrome cũ đã được xóa sạch."
+
     sudo dpkg -i "$FILE_SELECT"
     sudo apt -f install -y
     sudo apt-mark hold google-chrome-stable
