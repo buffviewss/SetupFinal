@@ -63,16 +63,30 @@ fi
 echo "✅ Chọn file: $FILE_SELECT"
 
 # ============================
-# Cài đặt và khóa cập nhật
-# ============================
+# === Cài đặt và khóa cập nhật ===
+if [[ $BTYPE == "chrome" ]]; then
+    echo "🚀 Đang cài Chrome..."
+    sudo dpkg -i "$FILE_SELECT"
+    sudo apt -f install -y
+    sudo apt-mark hold google-chrome-stable
+    sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
 
-echo "🗑️ Gỡ bản mặc định của Chrome..."
-sudo apt remove -y google-chrome-stable || true
-
-echo "🚀 Đang cài đặt Chrome..."
-sudo dpkg -i "$FILE_SELECT"
-sudo apt -f install -y
-sudo apt-mark hold google-chrome-stable
+    # 🔒 Tắt update nội bộ của Chrome
+    echo "🚫 Tắt update nội bộ Chrome..."
+    sudo rm -rf /opt/google/chrome/cron/
+    sudo mkdir -p /etc/opt/chrome/policies/managed
+    cat <<EOF > /tmp/disable_update.json
+{
+  "AutoUpdateCheckPeriodMinutes": 0,
+  "DisableAutoUpdateChecksCheckbox": true,
+  "MetricsReportingEnabled": false
+}
+EOF
+    sudo mv /tmp/disable_update.json /etc/opt/chrome/policies/managed/disable_update.json
+    sudo chmod -R 000 /opt/google/chrome/cron || true
+    
+    # Tắt repo Google Chrome để ngừng cập nhật từ nguồn chính thức
+    sudo sed -i 's/^deb/# deb/' /etc/apt/sources.list.d/google-chrome.list 2>/dev/null
 
 # ============================
 # Cài đặt Open VM Tools cho VMware
