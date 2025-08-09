@@ -1,5 +1,15 @@
-
 #!/bin/bash
+
+# === Kiểm tra và cài đặt Python, pip ===
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Python3 chưa được cài. Đang cài đặt..."
+    sudo apt update && sudo apt install -y python3 python3-venv python3-pip
+fi
+
+if ! command -v pip &> /dev/null; then
+    echo "❌ pip chưa được cài. Đang cài đặt..."
+    sudo apt install -y python3-pip
+fi
 
 # === Cài đặt Python venv và gdown ===
 if [[ ! -d "$HOME/gdown-venv" ]]; then
@@ -223,7 +233,7 @@ echo "📌 Pinning Nekobox to taskbar and enabling autostart..."
 # Pin cho Ubuntu GNOME
 if echo "$XDG_CURRENT_DESKTOP" | grep -qi "GNOME"; then
     echo "📌 Ubuntu GNOME detected - pinning Nekobox to taskbar..."
-    gsettings set org.gnome.shell favorite-apps     "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
+    gsettings set org.gnome.shell favorite-apps "$(gsettings get org.gnome.shell favorite-apps | sed "s/]$/, 'nekoray.desktop']/")" || true
 elif echo "$XDG_CURRENT_DESKTOP" | grep -qi "LXQt"; then
     echo "📌 Lubuntu LXQt detected - LXQt không hỗ trợ auto pin, bạn có thể kéo shortcut vào panel thủ công."
 else
@@ -242,4 +252,3 @@ echo "🚀 Launching Nekobox..."
 ./nekobox || echo "⚠️ Unable to launch Nekobox automatically. Start manually from ~/Downloads/nekoray."
 
 echo "✅ Setup completed successfully!"
-
