@@ -15,13 +15,26 @@ if ! dpkg -s python3-pip >/dev/null 2>&1; then
     sudo apt install -y python3-pip
 fi
 
-if [[ ! -d "$HOME/gdown-venv" ]]; then
-    echo "📦 Đang tạo venv Python và cài gdown..."
-    python3 -m venv ~/gdown-venv
+# ============================
+# Tạo và kích hoạt môi trường ảo cho toàn bộ script
+# ============================
+VENV_DIR="$HOME/gdown-venv"
+
+# Tạo venv nếu chưa có
+if [[ ! -d "$VENV_DIR" ]]; then
+    echo "📦 Tạo môi trường ảo Python..."
+    python3 -m venv "$VENV_DIR"
 fi
 
-source ~/gdown-venv/bin/activate
+# Kích hoạt venv
+echo "🔹 Kích hoạt môi trường ảo..."
+source "$VENV_DIR/bin/activate"
+
+# Cập nhật pip và cài thư viện cần
+echo "📦 Cài thư viện cần thiết vào venv..."
+pip install --upgrade pip
 pip install --no-cache-dir gdown
+
 
 # ============================
 # Cấu hình Google Drive Folder ID
